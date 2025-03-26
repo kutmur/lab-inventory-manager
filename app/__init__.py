@@ -1,0 +1,32 @@
+from flask import Flask
+from config import Config
+from app.extensions import db, login_manager, socketio
+
+def create_app(config_class=Config):
+    app = Flask(__name__)
+    app.config.from_object(config_class)
+
+    # Initialize extensions
+    db.init_app(app)
+    login_manager.init_app(app)
+    socketio.init_app(app)
+    
+    # Set login view
+    login_manager.login_view = 'auth.login'  # This tells Flask-Login where to redirect
+    login_manager.login_message = 'Please log in to access this page.'
+    login_manager.login_message_category = 'info'
+
+    # Import models
+    from app.models import User
+
+    @login_manager.user_loader
+    def load_user(user_id):
+        return User.query.get(int(user_id))
+
+    # Register blueprints
+    from app.main import bp as main_bp
+    from app.auth import bp as auth_bp
+    app.register_blueprint(main_bp)
+    app.register_blueprint(auth_bp, url_prefix='/auth')
+
+    return app 
