@@ -1,3 +1,0 @@
-Requirement already satisfied: python-docx in /home/halil/miniconda3/envs/lab_env/lib/python3.9/site-packages (1.1.2)
-Requirement already satisfied: lxml>=3.1.0 in /home/halil/miniconda3/envs/lab_env/lib/python3.9/site-packages (from python-docx) (5.3.1)
-Requirement already satisfied: typing-extensions>=4.9.0 in /home/halil/miniconda3/envs/lab_env/lib/python3.9/site-packages (from python-docx) (4.12.2)

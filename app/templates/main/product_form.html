@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="h5 mb-0">{{ title }}</h2>
+                </div>
+                <div class="card-body">
+                    <form method="POST">
+                        {{ form.hidden_tag() }}
+                        <div class="mb-3">
+                            {{ form.name.label(class="form-label") }}
+                            {{ form.name(class="form-control") }}
+                        </div>
+                        <div class="mb-3">
+                            {{ form.registry_number.label(class="form-label") }}
+                            {{ form.registry_number(class="form-control") }}
+                        </div>
+                        <div class="mb-3">
+                            {{ form.quantity.label(class="form-label") }}
+                            {{ form.quantity(class="form-control") }}
+                        </div>
+                        <div class="mb-3">
+                            {{ form.unit.label(class="form-label") }}
+                            {{ form.unit(class="form-control") }}
+                        </div>
+                        <div class="mb-3">
+                            {{ form.minimum_quantity.label(class="form-label") }}
+                            {{ form.minimum_quantity(class="form-control") }}
+                        </div>
+                        <div class="mb-3">
+                            {{ form.location_in_lab.label(class="form-label") }}
+                            {{ form.location_in_lab(class="form-control") }}
+                        </div>
+                        <div class="mb-3">
+                            {{ form.lab_id.label(class="form-label") }}
+                            {{ form.lab_id(class="form-control") }}
+                        </div>
+                        <div class="mb-3">
+                            {{ form.notes.label(class="form-label") }}
+                            {{ form.notes(class="form-control") }}
+                        </div>
+                        {{ form.submit(class="btn btn-primary") }}
+                        <a href="{{ url_for('main.dashboard') }}" class="btn btn-secondary">Cancel</a>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %} 
