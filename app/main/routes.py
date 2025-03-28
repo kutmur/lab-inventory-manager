@@ -63,58 +63,102 @@ def manage_users():
 @bp.route('/dashboard')
 @login_required
 def dashboard():
-    labs = Lab.query.all()
-    return render_template('main/dashboard.html', title='Dashboard', labs=labs)
+    # Get all predefined labs
+    all_labs = Lab.get_predefined_labs()
+    
+    # Get selected lab from query parameter, default to 'all'
+    selected_lab_code = request.args.get('lab', 'all')
+    
+    # If "all" is selected, show all labs
+    if selected_lab_code == 'all':
+        labs_to_show = all_labs
+    else:
+        # Find the selected lab
+        selected_lab = next((lab for lab in all_labs if lab.code == selected_lab_code), None)
+        if not selected_lab:
+            # If invalid lab code, default to 'all'
+            selected_lab_code = 'all'
+            labs_to_show = all_labs
+        else:
+            labs_to_show = [selected_lab]
+    
+    return render_template('main/dashboard.html', 
+                         title='Dashboard', 
+                         labs=labs_to_show,
+                         all_labs=all_labs,
+                         selected_lab_code=selected_lab_code)
 
 @bp.route('/product/add', methods=['GET', 'POST'])
 @login_required
 def add_product():
     form = ProductForm()
-    form.lab_id.choices = [(lab.id, lab.name) for lab in Lab.query.all()]
     
     if form.validate_on_submit():
         try:
+            # Verify that the selected lab exists
+            selected_lab = Lab.query.get(form.lab_id.data)
+            if not selected_lab:
+                flash('Please select a valid laboratory.', 'error')
+                return render_template('main/product_form.html', form=form, title='Add Product')
+
+            # Check if registry number is unique
+            if Product.query.filter_by(registry_number=form.registry_number.data).first():
+                flash('A product with this registry number already exists.', 'error')
+                return render_template('main/product_form.html', form=form, title='Add Product')
+
+            # Create new product
             product = Product(
                 name=form.name.data,
                 registry_number=form.registry_number.data,
                 quantity=form.quantity.data,
                 unit=form.unit.data,
                 minimum_quantity=form.minimum_quantity.data,
-                location_in_lab=form.location_in_lab.data,
+                cabinet_number=form.cabinet_number.data,
                 notes=form.notes.data,
-                lab_id=form.lab_id.data
+                lab_id=selected_lab.id
             )
+            
             db.session.add(product)
-            db.session.flush()  # Get product.id
+            db.session.flush()  # Get product.id before commit
             
             # Create log entry
             create_user_log(
                 user=current_user,
                 action_type='add',
                 product=product,
-                lab=Lab.query.get(form.lab_id.data),
+                lab=selected_lab,
                 quantity=form.quantity.data,
                 notes=f"Added new product: {product.name}"
             )
             
             db.session.commit()
 
-            # Notify connected clients
+            # Notify connected clients about the new product
             notify_inventory_update(product.id, 'add', {
                 'name': product.name,
                 'registry_number': product.registry_number,
                 'quantity': product.quantity,
-                'lab_id': product.lab_id
+                'lab_id': product.lab_id,
+                'cabinet_number': product.cabinet_number
             })
 
-            flash('Product added successfully!', 'success')
+            flash(f'Product "{product.name}" added successfully to {selected_lab.name}!', 'success')
             return redirect(url_for('main.dashboard'))
             
+        except ValueError as e:
+            db.session.rollback()
+            flash(f'Validation error: {str(e)}', 'error')
         except Exception as e:
             db.session.rollback()
-            flash('Error adding product. Please try again.', 'error')
+            current_app.logger.error(f"Error adding product: {str(e)}")
+            flash('An error occurred while adding the product. Please try again.', 'error')
     
-    return render_template('main/product_form.html', form=form, title='Add Product')
+    # If form validation failed, show errors
+    for field, errors in form.errors.items():
+        for error in errors:
+            flash(f'{getattr(form, field).label.text}: {error}', 'error')
+    
+    return render_template('main/product_form.html', form=form, title='Add Product', labs=Lab.get_predefined_labs())
 
 @bp.route('/product/<int:id>/edit', methods=['GET', 'POST'])
 @login_required
@@ -428,4 +472,74 @@ def export_excel():
     except Exception as e:
         current_app.logger.error(f"Excel generation error: {str(e)}")
         flash('Error generating Excel file. Please try again.', 'error')
-        return redirect(url_for('main.dashboard')) 
+        return redirect(url_for('main.dashboard'))
+
+@bp.route('/export/<lab_code>/<format>')
+def export_lab(lab_code, format):
+    lab = Lab.query.filter_by(code=lab_code).first_or_404()
+    products = Product.query.filter_by(lab_id=lab.id).all()
+    
+    data = []
+    for product in products:
+        data.append({
+            'Name': product.name,
+            'Registry Number': product.registry_number,
+            'Quantity': product.quantity,
+            'Unit': product.unit,
+            'Minimum Quantity': product.minimum_quantity,
+            'Location': product.location_in_lab,
+            'Notes': product.notes
+        })
+    
+    df = pd.DataFrame(data)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f"inventory_{lab.code}_{timestamp}"
+    
+    if format == 'xlsx':
+        output = f"{filename}.xlsx"
+        df.to_excel(output, index=False)
+        return send_file(output, as_attachment=True)
+    elif format == 'pdf':
+        # You'll need to implement PDF generation using a library like reportlab or fpdf
+        pass
+    elif format == 'docx':
+        # You'll need to implement Word document generation using python-docx
+        pass
+    
+    return "Format not supported", 400
+
+@bp.route('/export/all/<format>')
+def export_all_labs(format):
+    labs = Lab.query.all()
+    all_data = []
+    
+    for lab in labs:
+        products = Product.query.filter_by(lab_id=lab.id).all()
+        for product in products:
+            all_data.append({
+                'Lab': f"{lab.code} - {lab.description}",
+                'Name': product.name,
+                'Registry Number': product.registry_number,
+                'Quantity': product.quantity,
+                'Unit': product.unit,
+                'Minimum Quantity': product.minimum_quantity,
+                'Location': product.location_in_lab,
+                'Notes': product.notes
+            })
+    
+    df = pd.DataFrame(all_data)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f"full_inventory_{timestamp}"
+    
+    if format == 'xlsx':
+        output = f"{filename}.xlsx"
+        df.to_excel(output, index=False)
+        return send_file(output, as_attachment=True)
+    elif format == 'pdf':
+        # Implement PDF generation
+        pass
+    elif format == 'docx':
+        # Implement Word document generation
+        pass
+    
+    return "Format not supported", 400 

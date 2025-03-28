@@ -10,7 +10,7 @@ class Product(db.Model):
     quantity = db.Column(db.Float, nullable=False, default=0)
     unit = db.Column(db.String(20), nullable=False)
     minimum_quantity = db.Column(db.Float, default=0)
-    location_in_lab = db.Column(db.String(100))
+    cabinet_number = db.Column(db.String(20), nullable=False)  # Format: "number-position" (e.g., "1-upper")
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -25,6 +25,19 @@ class Product(db.Model):
     def validate_quantity(self, key, value):
         if value < 0:
             raise ValueError("Quantity cannot be negative")
+        return value
+
+    @validates('cabinet_number')
+    def validate_cabinet_number(self, key, value):
+        if not value or '-' not in value:
+            raise ValueError("Invalid cabinet number format")
+        number, position = value.split('-')
+        if position not in ['upper', 'lower']:
+            raise ValueError("Invalid cabinet position")
+        try:
+            int(number)
+        except ValueError:
+            raise ValueError("Cabinet number must be a number")
         return value
 
     def update_quantity(self, new_quantity):

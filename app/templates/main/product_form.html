@@ -9,7 +9,7 @@
                     <h2 class="h5 mb-0">{{ title }}</h2>
                 </div>
                 <div class="card-body">
-                    <form method="POST">
+                    <form method="POST" id="productForm">
                         {{ form.hidden_tag() }}
                         <div class="mb-3">
                             {{ form.name.label(class="form-label") }}
@@ -32,12 +32,12 @@
                             {{ form.minimum_quantity(class="form-control") }}
                         </div>
                         <div class="mb-3">
-                            {{ form.location_in_lab.label(class="form-label") }}
-                            {{ form.location_in_lab(class="form-control") }}
-                        </div>
-                        <div class="mb-3">
                             {{ form.lab_id.label(class="form-label") }}
                             {{ form.lab_id(class="form-control") }}
+                        </div>
+                        <div class="mb-3">
+                            {{ form.cabinet_number.label(class="form-label") }}
+                            {{ form.cabinet_number(class="form-control") }}
                         </div>
                         <div class="mb-3">
                             {{ form.notes.label(class="form-label") }}
@@ -51,4 +51,42 @@
         </div>
     </div>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const labSelect = document.getElementById('lab_id');
+    const cabinetSelect = document.getElementById('cabinet_number');
+    
+    // Store cabinet choices for each lab
+    const cabinetChoices = {};
+    {% for lab in labs %}
+    cabinetChoices[{{ lab.id }}] = {{ lab.get_cabinet_choices() | tojson }};
+    {% endfor %}
+    
+    function updateCabinetChoices() {
+        const selectedLabId = labSelect.value;
+        const choices = cabinetChoices[selectedLabId] || [];
+        
+        // Clear existing options
+        cabinetSelect.innerHTML = '';
+        
+        // Add new options
+        choices.forEach(([value, label]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            cabinetSelect.appendChild(option);
+        });
+        
+        // Enable/disable cabinet select based on lab selection
+        cabinetSelect.disabled = !selectedLabId;
+    }
+    
+    // Update cabinet choices when lab selection changes
+    labSelect.addEventListener('change', updateCabinetChoices);
+    
+    // Initial update
+    updateCabinetChoices();
+});
+</script>
 {% endblock %} 
