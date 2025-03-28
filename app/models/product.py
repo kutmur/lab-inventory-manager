@@ -10,7 +10,9 @@ class Product(db.Model):
     quantity = db.Column(db.Float, nullable=False, default=0)
     unit = db.Column(db.String(20), nullable=False)
     minimum_quantity = db.Column(db.Float, default=0)
-    cabinet_number = db.Column(db.String(20), nullable=False)  # Format: "number-position" (e.g., "1-upper")
+    location_type = db.Column(db.String(20), nullable=False)  # 'workspace' or 'cabinet'
+    location_number = db.Column(db.String(20))  # Cabinet number or workspace identifier
+    location_position = db.Column(db.String(10))  # 'upper', 'lower', or None for workspace
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -27,18 +29,26 @@ class Product(db.Model):
             raise ValueError("Quantity cannot be negative")
         return value
 
-    @validates('cabinet_number')
-    def validate_cabinet_number(self, key, value):
-        if not value or '-' not in value:
-            raise ValueError("Invalid cabinet number format")
-        number, position = value.split('-')
-        if position not in ['upper', 'lower']:
-            raise ValueError("Invalid cabinet position")
-        try:
-            int(number)
-        except ValueError:
-            raise ValueError("Cabinet number must be a number")
+    @validates('location_type')
+    def validate_location_type(self, key, value):
+        if value not in ['workspace', 'cabinet']:
+            raise ValueError("Invalid location type")
         return value
+
+    @validates('location_position')
+    def validate_location_position(self, key, value):
+        if self.location_type == 'cabinet' and value not in ['upper', 'lower']:
+            raise ValueError("Cabinet position must be 'upper' or 'lower'")
+        if self.location_type == 'workspace' and value is not None:
+            raise ValueError("Workspace items should not have a position")
+        return value
+
+    def get_location_display(self):
+        """Get a human-readable location string."""
+        if self.location_type == 'workspace':
+            return "Çalışma Alanı"
+        else:
+            return f"Dolap No: {self.location_number} - {'Üst' if self.location_position == 'upper' else 'Alt'}"
 
     def update_quantity(self, new_quantity):
         """Update quantity with optimistic locking"""

@@ -1,5 +1,5 @@
 from flask_wtf import FlaskForm
-from wtforms import StringField, FloatField, TextAreaField, SelectField, SubmitField
+from wtforms import StringField, FloatField, TextAreaField, SelectField, SubmitField, HiddenField
 from wtforms.validators import DataRequired, NumberRange, ValidationError
 from app.models import Lab
 
@@ -14,7 +14,7 @@ class ProductForm(FlaskForm):
     ], validators=[DataRequired()])
     minimum_quantity = FloatField('Minimum Quantity', validators=[DataRequired(), NumberRange(min=0, message="Minimum quantity must be greater than or equal to 0")])
     lab_id = SelectField('Lab', coerce=int, validators=[DataRequired()])
-    cabinet_number = SelectField('Cabinet Number', coerce=str, validators=[DataRequired()])
+    location_number = SelectField('Location', coerce=str, validators=[DataRequired()])
     notes = StringField('Notes')
     submit = SubmitField('Add Product')
 
@@ -23,15 +23,29 @@ class ProductForm(FlaskForm):
         # Get all predefined labs and sort them by code
         labs = Lab.get_predefined_labs()
         self.lab_id.choices = [(lab.id, f"{lab.code} - {lab.description}") for lab in labs]
-        # Initialize cabinet choices as empty (will be populated via JavaScript)
-        self.cabinet_number.choices = []
-        self.cabinet_number.render_kw = {'disabled': True}
+        # Initialize location choices as empty (will be populated via JavaScript)
+        self.location_number.choices = []
+        self.location_number.render_kw = {'disabled': True}
 
     def validate_quantity(self, field):
         try:
             float(field.data)
         except (ValueError, TypeError):
             raise ValidationError('Quantity must be a valid number')
+
+    def get_location_choices(self, lab_id):
+        """Get location choices for a specific lab."""
+        lab = Lab.query.get(lab_id)
+        if not lab:
+            return []
+        
+        choices = [('workspace', 'Çalışma Alanı')]
+        for cabinet_num in range(1, lab.max_cabinets + 1):
+            choices.extend([
+                (f"cabinet-{cabinet_num}-upper", f"Dolap No: {cabinet_num} - Üst"),
+                (f"cabinet-{cabinet_num}-lower", f"Dolap No: {cabinet_num} - Alt")
+            ])
+        return choices
 
 class TransferForm(FlaskForm):
     product_id = SelectField('Product', coerce=int, validators=[DataRequired()])

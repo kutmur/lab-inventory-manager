@@ -1,6 +1,7 @@
 from flask import Flask
 from config import Config
 from app.extensions import db, login_manager, socketio
+from app.models import User, Product
 
 def create_app(config_class=Config):
     app = Flask(__name__)
@@ -16,9 +17,6 @@ def create_app(config_class=Config):
     login_manager.login_message = 'Please log in to access this page.'
     login_manager.login_message_category = 'info'
 
-    # Import models
-    from app.models import User
-
     @login_manager.user_loader
     def load_user(user_id):
         return User.query.get(int(user_id))
@@ -28,5 +26,10 @@ def create_app(config_class=Config):
     from app.auth import bp as auth_bp
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp, url_prefix='/auth')
+
+    # Add context processor for models
+    @app.context_processor
+    def inject_models():
+        return dict(Product=Product)
 
     return app 

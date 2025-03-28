@@ -106,6 +106,17 @@ def add_product():
                 flash('A product with this registry number already exists.', 'error')
                 return render_template('main/product_form.html', form=form, title='Add Product')
 
+            # Parse location data
+            location_parts = form.location_number.data.split('-')
+            location_type = location_parts[0]
+            
+            if location_type == 'workspace':
+                location_number = None
+                location_position = None
+            else:
+                location_number = location_parts[1]
+                location_position = location_parts[2]
+
             # Create new product
             product = Product(
                 name=form.name.data,
@@ -113,13 +124,15 @@ def add_product():
                 quantity=form.quantity.data,
                 unit=form.unit.data,
                 minimum_quantity=form.minimum_quantity.data,
-                cabinet_number=form.cabinet_number.data,
+                location_type=location_type,
+                location_number=location_number,
+                location_position=location_position,
                 notes=form.notes.data,
                 lab_id=selected_lab.id
             )
             
             db.session.add(product)
-            db.session.flush()  # Get product.id before commit
+            db.session.flush()
             
             # Create log entry
             create_user_log(
@@ -139,7 +152,9 @@ def add_product():
                 'registry_number': product.registry_number,
                 'quantity': product.quantity,
                 'lab_id': product.lab_id,
-                'cabinet_number': product.cabinet_number
+                'location_type': product.location_type,
+                'location_number': product.location_number,
+                'location_position': product.location_position
             })
 
             flash(f'Product "{product.name}" added successfully to {selected_lab.name}!', 'success')
@@ -196,7 +211,7 @@ def edit_product(id):
             db.session.rollback()
             flash('Error updating product. Please try again.', 'error')
     
-    return render_template('main/product_form.html', form=form, title='Edit Product')
+    return render_template('main/product_form.html', form=form, title='Edit Product', labs=Lab.get_predefined_labs())
 
 @bp.route('/product/<int:id>/delete', methods=['POST'])
 @login_required

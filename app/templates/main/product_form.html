@@ -36,8 +36,8 @@
                             {{ form.lab_id(class="form-control") }}
                         </div>
                         <div class="mb-3">
-                            {{ form.cabinet_number.label(class="form-label") }}
-                            {{ form.cabinet_number(class="form-control") }}
+                            {{ form.location_number.label(class="form-label") }}
+                            {{ form.location_number(class="form-control") }}
                         </div>
                         <div class="mb-3">
                             {{ form.notes.label(class="form-label") }}
@@ -55,38 +55,38 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const labSelect = document.getElementById('lab_id');
-    const cabinetSelect = document.getElementById('cabinet_number');
+    const locationSelect = document.getElementById('location_number');
     
-    // Store cabinet choices for each lab
-    const cabinetChoices = {};
+    // Store location choices for each lab
+    const locationChoices = {};
     {% for lab in labs %}
-    cabinetChoices[{{ lab.id }}] = {{ lab.get_cabinet_choices() | tojson }};
+    locationChoices[{{ lab.id }}] = {{ form.get_location_choices(lab.id) | tojson }};
     {% endfor %}
     
-    function updateCabinetChoices() {
+    function updateLocationChoices() {
         const selectedLabId = labSelect.value;
-        const choices = cabinetChoices[selectedLabId] || [];
+        const choices = locationChoices[selectedLabId] || [];
         
         // Clear existing options
-        cabinetSelect.innerHTML = '';
+        locationSelect.innerHTML = '';
         
         // Add new options
         choices.forEach(([value, label]) => {
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
-            cabinetSelect.appendChild(option);
+            locationSelect.appendChild(option);
         });
         
-        // Enable/disable cabinet select based on lab selection
-        cabinetSelect.disabled = !selectedLabId;
+        // Enable/disable location select based on lab selection
+        locationSelect.disabled = !selectedLabId;
     }
     
-    // Update cabinet choices when lab selection changes
-    labSelect.addEventListener('change', updateCabinetChoices);
+    // Update location choices when lab selection changes
+    labSelect.addEventListener('change', updateLocationChoices);
     
     // Initial update
-    updateCabinetChoices();
+    updateLocationChoices();
 });
 </script>
 {% endblock %} 

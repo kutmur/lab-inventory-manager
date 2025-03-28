@@ -64,7 +64,12 @@
             </div>
         </div>
         <div class="card-body">
-            <div class="table-responsive">
+            {% set workspace_items = lab.products.filter_by(location_type='workspace').all() %}
+            {% set cabinet_items = lab.products.filter_by(location_type='cabinet').order_by(Product.location_number).all() %}
+            
+            {% if workspace_items %}
+            <h3 class="h6 mb-3">Çalışma Alanı</h3>
+            <div class="table-responsive mb-4">
                 <table class="table table-striped">
                     <thead>
                         <tr>
@@ -73,20 +78,18 @@
                             <th>Quantity</th>
                             <th>Unit</th>
                             <th>Min. Quantity</th>
-                            <th>Cabinet</th>
                             <th>Notes</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {% for product in lab.products %}
+                        {% for product in workspace_items %}
                         <tr>
                             <td>{{ product.name }}</td>
                             <td>{{ product.registry_number }}</td>
                             <td>{{ product.quantity }}</td>
                             <td>{{ product.unit }}</td>
                             <td>{{ product.minimum_quantity }}</td>
-                            <td>{{ product.cabinet_number }}</td>
                             <td>{{ product.notes }}</td>
                             <td>
                                 <a href="{{ url_for('main.edit_product', id=product.id) }}" class="btn btn-sm btn-primary">Edit</a>
@@ -97,6 +100,56 @@
                     </tbody>
                 </table>
             </div>
+            {% endif %}
+
+            {% if cabinet_items %}
+            <h3 class="h6 mb-3">Dolaplar</h3>
+            {% set current_cabinet = namespace(value='') %}
+            {% for product in cabinet_items %}
+                {% if current_cabinet.value != product.location_number %}
+                    {% if current_cabinet.value != '' %}
+                    </tbody>
+                    </table>
+                    </div>
+                    {% endif %}
+                    {% set current_cabinet.value = product.location_number %}
+                    <h4 class="h6 mb-2">Dolap No: {{ product.location_number }}</h4>
+                    <div class="table-responsive mb-4">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Registry Number</th>
+                                    <th>Quantity</th>
+                                    <th>Unit</th>
+                                    <th>Min. Quantity</th>
+                                    <th>Position</th>
+                                    <th>Notes</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                {% endif %}
+                <tr>
+                    <td>{{ product.name }}</td>
+                    <td>{{ product.registry_number }}</td>
+                    <td>{{ product.quantity }}</td>
+                    <td>{{ product.unit }}</td>
+                    <td>{{ product.minimum_quantity }}</td>
+                    <td>{{ 'Üst' if product.location_position == 'upper' else 'Alt' }}</td>
+                    <td>{{ product.notes }}</td>
+                    <td>
+                        <a href="{{ url_for('main.edit_product', id=product.id) }}" class="btn btn-sm btn-primary">Edit</a>
+                        <a href="{{ url_for('main.delete_product', id=product.id) }}" class="btn btn-sm btn-danger" onclick="return confirm('Are you sure?')">Delete</a>
+                    </td>
+                </tr>
+            {% endfor %}
+            {% if current_cabinet.value != '' %}
+            </tbody>
+            </table>
+            </div>
+            {% endif %}
+            {% endif %}
         </div>
     </div>
     {% endfor %}
