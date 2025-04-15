@@ -1,7 +1,12 @@
+# app/models/product.py
+
 from datetime import datetime
 from app.extensions import db
 from sqlalchemy import event
 from sqlalchemy.orm import validates
+
+class ConcurrencyError(Exception):
+    pass
 
 class Product(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -10,17 +15,22 @@ class Product(db.Model):
     quantity = db.Column(db.Float, nullable=False, default=0)
     unit = db.Column(db.String(20), nullable=False)
     minimum_quantity = db.Column(db.Float, default=0)
+    
     location_type = db.Column(db.String(20), nullable=False)  # 'workspace' or 'cabinet'
-    location_number = db.Column(db.String(20))  # Cabinet number or workspace identifier
-    location_position = db.Column(db.String(10))  # 'upper', 'lower', or None for workspace
+    location_number = db.Column(db.String(20))  # cabinet number
+    location_position = db.Column(db.String(10))  # 'upper'/'lower' or None
+    
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Foreign keys
+
+    # Optimistic locking alanı
+    version_id = db.Column(db.Integer, nullable=False, default=0)
+
+    # Foreign key
     lab_id = db.Column(db.Integer, db.ForeignKey('lab.id'), nullable=False)
-    
-    # Relationships with unique backref names
+
+    # Relationships
     transfer_logs = db.relationship('TransferLog', backref='transferred_product')
 
     @validates('quantity')
@@ -37,9 +47,10 @@ class Product(db.Model):
 
     @validates('location_position')
     def validate_location_position(self, key, value):
-        if self.location_type == 'cabinet' and value not in ['upper', 'lower']:
+        if self.location_type == 'cabinet' and value not in ['upper', 'lower', None]:
             raise ValueError("Cabinet position must be 'upper' or 'lower'")
         if self.location_type == 'workspace' and value is not None:
+            # workspace için location_position = None olmalı
             raise ValueError("Workspace items should not have a position")
         return value
 
@@ -48,10 +59,11 @@ class Product(db.Model):
         if self.location_type == 'workspace':
             return "Çalışma Alanı"
         else:
-            return f"Dolap No: {self.location_number} - {'Üst' if self.location_position == 'upper' else 'Alt'}"
+            pos_text = 'Üst' if self.location_position == 'upper' else 'Alt'
+            return f"Dolap No: {self.location_number} - {pos_text}"
 
     def update_quantity(self, new_quantity):
-        """Update quantity with optimistic locking"""
+        """Example method for optimistic locking usage."""
         current_version = self.version_id
         self.quantity = new_quantity
         self.version_id += 1
@@ -59,14 +71,11 @@ class Product(db.Model):
             db.session.commit()
         except:
             db.session.rollback()
-            # Refresh the product from database
+            # Veritabanından güncel bilgiyi çek
             db.session.refresh(self)
             if self.version_id != current_version:
                 raise ConcurrencyError("Product was modified by another user")
             raise
 
     def __repr__(self):
-        return f'<Product {self.registry_number}>' 
-
-class ConcurrencyError(Exception):
-    pass 
+        return f'<Product {self.registry_number}>'

@@ -1,3 +1,5 @@
+# app/utils.py
+
 from app.models import UserLog
 from app.extensions import db
 
@@ -14,4 +16,4 @@ def create_user_log(user, action_type, product, lab, quantity, notes=None):
         notes=notes
     )
     db.session.add(log)
-    return log 
+    return log

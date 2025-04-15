@@ -11,40 +11,61 @@
                 <div class="card-body">
                     <form method="POST" id="productForm">
                         {{ form.hidden_tag() }}
+                        
+                        <!-- NAME -->
                         <div class="mb-3">
                             {{ form.name.label(class="form-label") }}
                             {{ form.name(class="form-control") }}
                         </div>
+
+                        <!-- REGISTRY NUMBER -->
                         <div class="mb-3">
                             {{ form.registry_number.label(class="form-label") }}
                             {{ form.registry_number(class="form-control") }}
                         </div>
+
+                        <!-- QUANTITY -->
                         <div class="mb-3">
                             {{ form.quantity.label(class="form-label") }}
                             {{ form.quantity(class="form-control") }}
                         </div>
+
+                        <!-- UNIT -->
                         <div class="mb-3">
                             {{ form.unit.label(class="form-label") }}
                             {{ form.unit(class="form-control") }}
                         </div>
+
+                        <!-- MINIMUM QUANTITY -->
                         <div class="mb-3">
                             {{ form.minimum_quantity.label(class="form-label") }}
                             {{ form.minimum_quantity(class="form-control") }}
                         </div>
+
+                        <!-- LAB SELECTION -->
                         <div class="mb-3">
                             {{ form.lab_id.label(class="form-label") }}
                             {{ form.lab_id(class="form-control") }}
                         </div>
+
+                        <!-- LOCATION -->
                         <div class="mb-3">
                             {{ form.location_number.label(class="form-label") }}
                             {{ form.location_number(class="form-control") }}
+                            {# JS ile doldurulacak #}
                         </div>
+
+                        <!-- NOTES -->
                         <div class="mb-3">
                             {{ form.notes.label(class="form-label") }}
                             {{ form.notes(class="form-control") }}
                         </div>
+                        
+                        <!-- SUBMIT BUTTON -->
                         {{ form.submit(class="btn btn-primary") }}
-                        <a href="{{ url_for('main.dashboard') }}" class="btn btn-secondary">Cancel</a>
+                        <a href="{{ url_for('main.dashboard') }}" class="btn btn-secondary">
+                            Cancel
+                        </a>
                     </form>
                 </div>
             </div>
@@ -52,41 +73,48 @@
     </div>
 </div>
 
+<!-- JavaScript: Dinamik konum seçenekleri -->
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const labSelect = document.getElementById('lab_id');
-    const locationSelect = document.getElementById('location_number');
-    
-    // Store location choices for each lab
-    const locationChoices = {};
-    {% for lab in labs %}
-    locationChoices[{{ lab.id }}] = {{ form.get_location_choices(lab.id) | tojson }};
-    {% endfor %}
-    
+    const labSelect = document.getElementById('{{ form.lab_id.id }}');
+    const locationSelect = document.getElementById('{{ form.location_number.id }}');
+
+    // locationChoices sözlüğünü doldurmak için, her lab_id'ye karşılık
+    // form.get_location_choices(lab.id) fonskiyonu ile elde edeceğimiz
+    // [ [value, label], [value, label], ... ] listesi
+    // Sunucu tarafında (Python) jinja ile tojson kullanarak gömeceğiz:
+    const locationChoices = {
+        {% for lab in labs %}
+          {{ lab.id }}: {{ form.get_location_choices(lab.id) | tojson }},
+        {% endfor %}
+    };
+
     function updateLocationChoices() {
         const selectedLabId = labSelect.value;
         const choices = locationChoices[selectedLabId] || [];
-        
-        // Clear existing options
+
+        // Önce "location_number" select içini temizle
         locationSelect.innerHTML = '';
-        
-        // Add new options
+
+        // Seçenek ekliyoruz
         choices.forEach(([value, label]) => {
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
             locationSelect.appendChild(option);
         });
-        
-        // Enable/disable location select based on lab selection
-        locationSelect.disabled = !selectedLabId;
+
+        // Hiç lab seçilmemişse disable edebiliriz; seçildiyse enable
+        if (selectedLabId) {
+            locationSelect.disabled = false;
+        } else {
+            locationSelect.disabled = true;
+        }
     }
-    
-    // Update location choices when lab selection changes
+
+    // Sayfa ilk yüklendiğinde ve her lab değiştiğinde güncelle
     labSelect.addEventListener('change', updateLocationChoices);
-    
-    // Initial update
-    updateLocationChoices();
+    updateLocationChoices();  // sayfa yüklenince ilk defa
 });
 </script>
-{% endblock %} 
+{% endblock %}
