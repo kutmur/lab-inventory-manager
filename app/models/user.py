@@ -10,10 +10,9 @@ class User(UserMixin, db.Model):
     password_hash = db.Column(db.String(128))
     role = db.Column(db.String(20), nullable=False, default='user')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    # Relationships with unique backref names
-    transfer_logs_created = db.relationship('TransferLog', backref='transfer_creator',
-                                          foreign_keys='TransferLog.created_by_id')
+
+    # Kullanıcı logları: UserLog modeline backref 'log_owner' eklendi
+    logs = db.relationship('UserLog', backref=db.backref('log_owner', lazy='joined'), lazy='dynamic')
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -24,5 +23,8 @@ class User(UserMixin, db.Model):
     def is_admin(self):
         return self.role == 'admin'
 
+    def is_editor(self):
+        return self.role in ['admin', 'editor']
+
     def __repr__(self):
-        return f'<User {self.username}>' 
+        return f'<User {self.username}>'

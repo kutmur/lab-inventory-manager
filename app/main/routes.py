@@ -1,23 +1,24 @@
 # app/main/routes.py
 
-from flask import render_template, redirect, url_for, flash, request, send_file, current_app
-from flask_login import login_required, current_user
-from app.main import bp
-from app.main.forms import ProductForm, TransferForm, LabForm
-from app.models import Product, Lab, TransferLog, UserLog
-from app.extensions import db
-from app.auth.decorators import admin_required
 import io
 from datetime import datetime
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
-from reportlab.lib.styles import getSampleStyleSheet
+from flask import render_template, redirect, url_for, flash, request, send_file, current_app
+from flask_login import login_required, current_user
 from docx import Document
 from docx.shared import Inches
 import pandas as pd
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+
+from app.main import bp
+from app.main.forms import ProductForm, TransferForm, LabForm
+from app.auth.decorators import admin_required
+from app.models import Product, Lab, TransferLog, UserLog
+from app.extensions import db
 from app.utils import create_user_log
-from app.socket_events import notify_inventory_update
+from app.socket_events import notify_inventory_update, notify_stock_alert
 from app.models.product import ConcurrencyError
 
 
@@ -29,55 +30,71 @@ def index():
     """
     return render_template('main/index.html', title='Home')
 
+
 @bp.route('/admin/dashboard')
 @login_required
 @admin_required
 def admin_dashboard():
     """
-    Admin kontrol paneli örneği.
+    Basit bir Admin kontrol paneli örneği.
     """
     return render_template('admin/dashboard.html')
+
 
 @bp.route('/user/profile')
 @login_required
 def user_profile():
+    """
+    Kullanıcının profil sayfası (placeholder).
+    """
     return render_template('user/profile.html')
+
 
 @bp.route('/protected-route')
 @login_required
 def protected_route():
+    """
+    Giriş yapmış kullanıcıların görebileceği korumalı route (placeholder).
+    """
     return render_template('protected.html')
+
 
 @bp.route('/admin-only')
 @login_required
 @admin_required
 def admin_only():
+    """
+    Yalnızca admin rolüne sahip kullanıcıların erişebileceği bir sayfa (placeholder).
+    """
     return render_template('admin.html')
+
 
 @bp.route('/products')
 @login_required
 def products():
     """
-    Örnek: Tüm kullanıcıların görebileceği bir ürün listesi (şimdilik placeholder).
+    Tüm kullanıcıların görebileceği bir ürün listesi (placeholder).
     """
     return render_template('products.html')
+
 
 @bp.route('/admin/manage-users')
 @login_required
 @admin_required
 def manage_users():
     """
-    Sadece adminlerin görebileceği bir manage users sayfası. (placeholder)
+    Yalnızca adminlerin görebileceği kullanıcı yönetimi sayfası (placeholder).
     """
     return render_template('admin/manage_users.html')
+
 
 @bp.route('/dashboard')
 @login_required
 def dashboard():
     """
-    Laboratuvarları listeler. Query param 'lab' = 'all' ya da lab.code olabilir.
+    Laboratuvarları listeler. Query param `lab=all` veya `lab=<lab.code>` olabilir.
     """
-    # Tüm predefined labs’i getir
+    # Tüm predefined labs’i getiriyoruz
     all_labs = Lab.get_predefined_labs()
     selected_lab_code = request.args.get('lab', 'all')
 
@@ -90,47 +107,52 @@ def dashboard():
             labs_to_show = all_labs
         else:
             labs_to_show = [selected_lab]
-    
+
     return render_template(
-        'main/dashboard.html', 
-        title='Dashboard', 
+        'main/dashboard.html',
+        title='Dashboard',
         labs=labs_to_show,
         all_labs=all_labs,
         selected_lab_code=selected_lab_code
     )
+
 
 @bp.route('/product/add', methods=['GET', 'POST'])
 @login_required
 def add_product():
     """
     Yeni bir ürün eklemek için form.
-    Location bilgisi (workspace ya da cabinet-x-upper/lower) parse ediliyor.
+    'Location' bilgisi (workspace veya cabinet-x-upper/lower) parse ediliyor.
     """
     form = ProductForm()
+    labs = Lab.get_predefined_labs()  # JS tarafında konum seçeneği oluşturmak için
+
     if form.validate_on_submit():
         try:
+            # Seçilen laboratuvarı al
             selected_lab = Lab.query.get(form.lab_id.data)
             if not selected_lab:
                 flash('Please select a valid laboratory.', 'error')
-                return render_template('main/product_form.html', form=form, title='Add Product')
+                return render_template('main/product_form.html', form=form, title='Add Product', labs=labs)
 
-            # Registry number uniqueness check
-            if Product.query.filter_by(registry_number=form.registry_number.data).first():
+            # Registry number eşsiz mi, kontrol edelim
+            existing_p = Product.query.filter_by(registry_number=form.registry_number.data).first()
+            if existing_p:
                 flash('A product with this registry number already exists.', 'error')
-                return render_template('main/product_form.html', form=form, title='Add Product')
+                return render_template('main/product_form.html', form=form, title='Add Product', labs=labs)
 
-            # Konum parse
+            # Konum parse (workspace veya cabinet-<num>-upper/lower)
             loc_parts = form.location_number.data.split('-')
             if loc_parts[0] == 'workspace':
                 location_type = 'workspace'
                 location_number = None
                 location_position = None
             else:
-                # "cabinet-<num>-upper/lower" format
                 location_type = 'cabinet'
                 location_number = loc_parts[1]
                 location_position = loc_parts[2]
 
+            # Yeni ürün nesnesi
             product = Product(
                 name=form.name.data,
                 registry_number=form.registry_number.data,
@@ -143,7 +165,7 @@ def add_product():
                 notes=form.notes.data,
                 lab_id=selected_lab.id
             )
-            
+
             db.session.add(product)
             db.session.flush()
 
@@ -156,9 +178,10 @@ def add_product():
                 quantity=product.quantity,
                 notes=f"Added new product: {product.name}"
             )
+
             db.session.commit()
 
-            # Socket.io notification
+            # WebSocket ile duyuru
             notify_inventory_update(product.id, 'add', {
                 'name': product.name,
                 'registry_number': product.registry_number,
@@ -171,48 +194,50 @@ def add_product():
 
             flash(f'Product "{product.name}" added successfully to {selected_lab.name}!', 'success')
             return redirect(url_for('main.dashboard'))
-        except ValueError as ve:
-            db.session.rollback()
-            flash(f'Validation error: {str(ve)}', 'error')
+
         except Exception as e:
             db.session.rollback()
             current_app.logger.error(f"Error adding product: {str(e)}")
             flash('An error occurred while adding the product. Please try again.', 'error')
 
-    # Form hataları (validate_on_submit değilse veya hata döndüyse)
-    for field, errors in form.errors.items():
-        for error in errors:
-            flash(f'{getattr(form, field).label.text}: {error}', 'error')
+    if form.errors:
+        for field, errors in form.errors.items():
+            for error in errors:
+                flash(f'{getattr(form, field).label.text}: {error}', 'error')
 
-    return render_template('main/product_form.html', form=form, title='Add Product', labs=Lab.get_predefined_labs())
+    return render_template('main/product_form.html', form=form, title='Add Product', labs=labs)
+
 
 @bp.route('/product/<int:id>/edit', methods=['GET', 'POST'])
 @login_required
 def edit_product(id):
     """
-    Var olan ürün düzenlemesi.
+    Var olan ürünün düzenlenmesi (global route).
     """
     product = Product.query.get_or_404(id)
     form = ProductForm(obj=product)
-    # Lab listesini set et
-    form.lab_id.choices = [(lab.id, lab.name) for lab in Lab.query.all()]
+    labs = Lab.get_predefined_labs()
 
-    # location_number defaultu
+    # Mevcut product'ın konumu form field'ına set edelim
     if product.location_type == 'workspace':
         form.location_number.data = 'workspace'
     else:
         form.location_number.data = f"cabinet-{product.location_number}-{product.location_position}"
 
+    # Lab dropdown default olarak product.lab_id
+    form.lab_id.data = product.lab_id
+
     if form.validate_on_submit():
         try:
-            old_quantity = product.quantity
-            product.name = form.name.data
-            product.registry_number = form.registry_number.data
-            product.quantity = form.quantity.data
-            product.unit = form.unit.data
-            product.minimum_quantity = form.minimum_quantity.data
+            selected_lab = Lab.query.get(form.lab_id.data)
+            if not selected_lab:
+                flash('Please select a valid laboratory.', 'error')
+                return render_template('main/product_form.html', form=form, title='Edit Product', labs=labs)
 
-            # Lokasyon parse
+            # Save old quantity for comparison
+            old_quantity = product.quantity
+
+            # Update product fields
             loc_parts = form.location_number.data.split('-')
             if loc_parts[0] == 'workspace':
                 product.location_type = 'workspace'
@@ -223,28 +248,54 @@ def edit_product(id):
                 product.location_number = loc_parts[1]
                 product.location_position = loc_parts[2]
 
+            product.name = form.name.data
+            product.registry_number = form.registry_number.data
+            product.quantity = form.quantity.data
+            product.unit = form.unit.data
+            product.minimum_quantity = form.minimum_quantity.data
             product.notes = form.notes.data
-            product.lab_id = form.lab_id.data
+            product.lab_id = selected_lab.id
 
-            # Miktar değiştiyse log
+            # Check stock level and notify if necessary
+            stock_level = product.check_stock_level()
+            if stock_level in ['low', 'out']:
+                notify_stock_alert(product, stock_level)
+
+            # User log for quantity change
             if old_quantity != product.quantity:
+                diff = product.quantity - old_quantity
                 create_user_log(
                     user=current_user,
                     action_type='edit',
                     product=product,
-                    lab=product.lab,
-                    quantity=product.quantity - old_quantity,
-                    notes="Edited product quantity"
+                    lab=selected_lab,
+                    quantity=diff,
+                    notes=f"Updated quantity from {old_quantity} to {product.quantity}"
                 )
 
             db.session.commit()
+
+            # Notify via WebSocket
+            notify_inventory_update(product.id, 'edit', {
+                'name': product.name,
+                'quantity': product.quantity,
+                'lab_id': product.lab_id
+            })
+
             flash('Product updated successfully!', 'success')
             return redirect(url_for('main.dashboard'))
+
         except Exception as e:
             db.session.rollback()
             flash('Error updating product. Please try again.', 'error')
 
-    return render_template('main/product_form.html', form=form, title='Edit Product', labs=Lab.get_predefined_labs())
+    if form.errors:
+        for field, errors in form.errors.items():
+            for error in errors:
+                flash(f'{getattr(form, field).label.text}: {error}', 'error')
+
+    return render_template('main/product_form.html', form=form, title='Edit Product', labs=labs)
+
 
 @bp.route('/product/<int:id>/delete', methods=['POST'])
 @login_required
@@ -255,29 +306,136 @@ def delete_product(id):
     """
     try:
         product = Product.query.get_or_404(id)
-        # Log
+
         create_user_log(
             user=current_user,
             action_type='delete',
             product=product,
             lab=product.lab,
-            quantity=-product.quantity,
+            quantity=-product.quantity,  # Silinen miktar kaydı
             notes=f"Deleted product {product.name}"
         )
+
         db.session.delete(product)
         db.session.commit()
         flash('Product deleted successfully!', 'success')
     except Exception as e:
         db.session.rollback()
         flash('Error deleting product. Please try again.', 'error')
-    
+
     return redirect(url_for('main.dashboard'))
+
+
+#######################################################################
+#  - - -  BU İKİ ROUTE LAB-ID BAZLI DÜZENLEME/SİLME İSTEYENLER İÇİN - -
+#######################################################################
+
+@bp.route('/lab/<int:lab_id>/product/<int:product_id>/edit', methods=['GET', 'POST'])
+@login_required
+def edit_lab_product(lab_id, product_id):
+    """
+    Belirli laboratuvardaki (lab_id) ürünü (product_id) düzenleme.
+    """
+    lab = Lab.query.get_or_404(lab_id)
+    product = Product.query.filter_by(id=product_id, lab_id=lab_id).first_or_404()
+
+    form = ProductForm(obj=product)
+    # Sadece bu lab'ı dropdown'da göstermek istiyorsanız:
+    form.lab_id.choices = [(lab.id, f"{lab.code} - {lab.description}")]
+    form.lab_id.data = lab.id
+
+    # Konum set et
+    if product.location_type == 'workspace':
+        form.location_number.data = 'workspace'
+    else:
+        form.location_number.data = f"cabinet-{product.location_number}-{product.location_position}"
+
+    if form.validate_on_submit():
+        try:
+            old_quantity = product.quantity
+
+            loc_parts = form.location_number.data.split('-')
+            if loc_parts[0] == 'workspace':
+                product.location_type = 'workspace'
+                product.location_number = None
+                product.location_position = None
+            else:
+                product.location_type = 'cabinet'
+                product.location_number = loc_parts[1]
+                product.location_position = loc_parts[2]
+
+            product.name = form.name.data
+            product.registry_number = form.registry_number.data
+            product.quantity = form.quantity.data
+            product.unit = form.unit.data
+            product.minimum_quantity = form.minimum_quantity.data
+            product.notes = form.notes.data
+            # lab_id sabit: product.lab_id = lab.id
+
+            # Miktar değiştiyse user log
+            if old_quantity != product.quantity:
+                diff = product.quantity - old_quantity
+                create_user_log(
+                    user=current_user,
+                    action_type='edit',
+                    product=product,
+                    lab=lab,
+                    quantity=diff,
+                    notes="Edited product quantity"
+                )
+
+            db.session.commit()
+            flash(f'Product in {lab.code} updated successfully!', 'success')
+            return redirect(url_for('main.dashboard', lab=lab.code))
+
+        except Exception as e:
+            db.session.rollback()
+            flash('Error updating product. Please try again.', 'error')
+
+    return render_template('main/product_form.html', form=form,
+                           title=f"Edit Product in {lab.code}",
+                           labs=[lab])
+
+
+@bp.route('/lab/<int:lab_id>/product/<int:product_id>/delete', methods=['POST'])
+@login_required
+@admin_required
+def delete_lab_product(lab_id, product_id):
+    """
+    Belirli laboratuvardaki ürünü silme (admin).
+    """
+    try:
+        lab = Lab.query.get_or_404(lab_id)
+        product = Product.query.filter_by(id=product_id, lab_id=lab_id).first_or_404()
+
+        create_user_log(
+            user=current_user,
+            action_type='delete',
+            product=product,
+            lab=lab,
+            quantity=-product.quantity,
+            notes=f"Deleted product {product.name} from lab {lab.code}"
+        )
+
+        db.session.delete(product)
+        db.session.commit()
+        flash(f'Product "{product.name}" deleted successfully from {lab.code}!', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash('Error deleting product. Please try again.', 'error')
+
+    return redirect(url_for('main.dashboard', lab=lab.code))
+
+
+#######################################################################
+#  TRANSFER ROUTE
+#######################################################################
 
 @bp.route('/transfer', methods=['GET', 'POST'])
 @login_required
 def transfer_product():
     """
-    Transfer formu. Source lab -> Destination lab.
+    Transfer formu: Source Lab -> Destination Lab.
     """
     form = TransferForm()
     form.source_lab_id.choices = [(lab.id, lab.name) for lab in Lab.query.all()]
@@ -310,7 +468,7 @@ def transfer_product():
             # Kaynaktan düş
             old_quantity = product.quantity
             product.quantity = old_quantity - transfer_qty
-            db.session.flush()  # Veritabanına yaz ama commit etme
+            db.session.flush()  # henüz commit değil
 
             # Hedef lab’da aynı registry_number varsa ekle, yoksa yeni oluştur
             dest_product = Product.query.filter_by(registry_number=product.registry_number, lab_id=destination_lab_id).first()
@@ -342,7 +500,7 @@ def transfer_product():
             )
             db.session.add(transfer_log)
 
-            # User Log (source)
+            # UserLog (source)
             create_user_log(
                 user=current_user,
                 action_type='transfer',
@@ -351,7 +509,7 @@ def transfer_product():
                 quantity=-transfer_qty,
                 notes=f"Transferred out {transfer_qty} from {product.lab.code} to lab_id={destination_lab_id}"
             )
-            # User Log (destination)
+            # UserLog (destination)
             create_user_log(
                 user=current_user,
                 action_type='transfer',
@@ -383,9 +541,9 @@ def transfer_product():
     return render_template('main/transfer_form.html', form=form, title='Transfer Product')
 
 
-########################################################################
-#  - - - - - - -  EXPORT ROTALARI (PDF/XLSX/DOCX) - - - - - - - -       #
-########################################################################
+#######################################################################
+#  - - - - - - -  EXPORT ROTALARI (PDF / XLSX / DOCX) - - - - - - - - -
+#######################################################################
 
 @bp.route('/export/<lab_code>/<format>')
 @login_required
@@ -395,14 +553,9 @@ def export_lab(lab_code, format):
     lab_code => Lab.code
     format => pdf / xlsx / docx
     """
-
-    # Lab sorgula, yoksa 404
     lab = Lab.query.filter_by(code=lab_code).first_or_404()
-
-    # Ürünleri çek
     products = Product.query.filter_by(lab_id=lab.id).all()
 
-    # DataFrame için verileri hazırlayalım
     data = []
     for product in products:
         data.append({
@@ -419,7 +572,7 @@ def export_lab(lab_code, format):
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     filename = f"inventory_{lab.code}_{timestamp}"
 
-    # 1) EXCEL
+    # Excel
     if format == 'xlsx':
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -444,7 +597,7 @@ def export_lab(lab_code, format):
             as_attachment=True
         )
 
-    # 2) PDF
+    # PDF
     elif format == 'pdf':
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter)
@@ -453,7 +606,7 @@ def export_lab(lab_code, format):
 
         elements.append(Paragraph(f"Lab Inventory Report - {lab.code}", styles['Title']))
         elements.append(Paragraph(
-            f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}", 
+            f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             styles['Normal']
         ))
 
@@ -491,7 +644,7 @@ def export_lab(lab_code, format):
             as_attachment=True
         )
 
-    # 3) DOCX
+    # DOCX
     elif format == 'docx':
         doc = Document()
         doc.add_heading(f"Lab Inventory Report - {lab.code}", 0)
@@ -553,7 +706,6 @@ def export_all_labs(format):
                 'Notes': product.notes or ''
             })
 
-    # Boşsa uyarı
     if not all_data:
         flash('No data available to export', 'warning')
         return redirect(url_for('main.dashboard'))
@@ -596,7 +748,7 @@ def export_all_labs(format):
 
         elements.append(Paragraph("All Labs Inventory Report", styles['Title']))
         elements.append(Paragraph(
-            f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}", 
+            f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             styles['Normal']
         ))
 
@@ -679,20 +831,76 @@ def export_all_labs(format):
         return "Format not supported", 400
 
 
-########################################################################
-# Ek olarak, user_logs fonksiyonu da istersen buraya ekleyebilirsin:
-########################################################################
+#######################################################################
+# USER ACTIVITY LOG GÖRÜNTÜLEME (ADMIN)
+#######################################################################
 
 @bp.route('/logs')
 @login_required
 @admin_required
 def user_logs():
     """
-    Kullanıcı aksiyon loglarını listeler. 
+    Kullanıcı aksiyon loglarını listeler (UserLog).
     """
     page = request.args.get('page', 1, type=int)
     per_page = 20
     logs = UserLog.query.order_by(UserLog.timestamp.desc()).paginate(page=page, per_page=per_page, error_out=False)
-    return render_template('main/user_logs.html', 
+    return render_template('main/user_logs.html',
                            title='User Activity Logs',
                            logs=logs)
+
+
+@bp.route('/search')
+@login_required
+def search_products():
+    """
+    Ürün adı veya sicil numarasına göre arama yapar
+    """
+    query = request.args.get('q', '')
+    lab_code = request.args.get('lab', 'all')
+    
+    if lab_code != 'all':
+        lab = Lab.query.filter_by(code=lab_code).first_or_404()
+        products = Product.search(query, lab.id)
+    else:
+        products = Product.search(query)
+    
+    return render_template('main/search_results.html',
+                         title='Search Results',
+                         query=query,
+                         products=products,
+                         selected_lab_code=lab_code)
+
+
+@bp.route('/lab/add', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def add_lab():
+    """
+    Yeni bir laboratuvar eklemek için form.
+    """
+    form = LabForm()
+    if form.validate_on_submit():
+        try:
+            # Generate a code based on the lab name if not in predefined labs
+            code = form.name.data.upper().replace(' ', '')[:20]
+            
+            lab = Lab(
+                code=code,
+                name=form.name.data,
+                description=form.description.data,
+                location=form.location.data,
+                max_cabinets=8  # Default value
+            )
+            
+            db.session.add(lab)
+            db.session.commit()
+            
+            flash(f'Laboratory "{lab.name}" has been added successfully!', 'success')
+            return redirect(url_for('main.dashboard'))
+            
+        except Exception as e:
+            db.session.rollback()
+            flash('Error adding laboratory. Please try again.', 'error')
+            
+    return render_template('main/lab_form.html', form=form, title='Add Laboratory')

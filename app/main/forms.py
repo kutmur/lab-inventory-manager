@@ -1,13 +1,19 @@
-# app/main/forms.py
-
 from flask_wtf import FlaskForm
-from wtforms import (StringField, FloatField, TextAreaField, SelectField,
-                     SubmitField)
+from wtforms import (
+    StringField,
+    FloatField,
+    TextAreaField,
+    SelectField,
+    SubmitField
+)
 from wtforms.validators import DataRequired, NumberRange, ValidationError
 from app.models import Lab
 
-
 class ProductForm(FlaskForm):
+    """
+    Yeni bir ürün (Product) eklemek veya düzenlemek için kullanılan form.
+    'location_number' alanı, hem sunucu hem de JS tarafında dinamik şekilde doldurulacak.
+    """
     name = StringField('Product Name', validators=[DataRequired()])
     registry_number = StringField('Registry Number', validators=[DataRequired()])
     quantity = FloatField('Quantity', validators=[
@@ -32,25 +38,31 @@ class ProductForm(FlaskForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Tüm lab'ları çekip select'e ekliyoruz (predefined veya Lab.query.all)
+
+        # Lab listesini her zaman doldur
         labs = Lab.get_predefined_labs()
         self.lab_id.choices = [
             (lab.id, f"{lab.code} - {lab.description}") for lab in labs
         ]
-        # Location alanını JS ile dolduracağımız için başlangıçta boş tutuyoruz
-        self.location_number.choices = []
-        # disabled => Javascript ile "lab" seçilince aktif edilecek
-        self.location_number.render_kw = {'disabled': True}
+
+        # Eğer form POST edilmiş veya obj ile gelmişse, seçimleri sun
+        if self.lab_id.data:
+            self.location_number.choices = self.get_location_choices(self.lab_id.data)
+            self.location_number.render_kw = {}
+        else:
+            # Aksi halde başlangıçta pasif kalsın
+            self.location_number.choices = []
+            self.location_number.render_kw = {'disabled': True}
 
     def get_location_choices(self, lab_id):
-        """Seçili lab'a göre konum (workspace / dolap) listesi döndürür."""
+        """
+        Seçili lab'a göre location (workspace / dolap) listesi döndürür.
+        """
         lab = Lab.query.get(lab_id)
         if not lab:
             return []
-        
-        choices = [
-            ('workspace', 'Çalışma Alanı')
-        ]
+
+        choices = [('workspace', 'Çalışma Alanı')]
         for cabinet_num in range(1, lab.max_cabinets + 1):
             choices.append(
                 (f"cabinet-{cabinet_num}-upper", f"Dolap No: {cabinet_num} - Üst")
@@ -61,7 +73,9 @@ class ProductForm(FlaskForm):
         return choices
 
     def validate_quantity(self, field):
-        # Sayısal olmalı
+        """
+        Ek validasyon: sayının parse edilebildiğinden emin ol.
+        """
         try:
             float(field.data)
         except (ValueError, TypeError):
@@ -69,6 +83,9 @@ class ProductForm(FlaskForm):
 
 
 class TransferForm(FlaskForm):
+    """
+    Bir ürünü bir laboratuvardan diğerine aktarmak için gereken form.
+    """
     product_id = SelectField('Product', coerce=int, validators=[DataRequired()])
     quantity = FloatField('Quantity to Transfer', validators=[
         DataRequired(),
@@ -81,6 +98,9 @@ class TransferForm(FlaskForm):
 
 
 class LabForm(FlaskForm):
+    """
+    Yeni bir laboratuvar eklemek veya düzenlemek için form.
+    """
     name = StringField('Lab Name', validators=[DataRequired()])
     description = TextAreaField('Description')
     location = StringField('Location')

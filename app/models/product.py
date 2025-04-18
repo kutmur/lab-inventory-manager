@@ -2,7 +2,6 @@
 
 from datetime import datetime
 from app.extensions import db
-from sqlalchemy import event
 from sqlalchemy.orm import validates
 
 class ConcurrencyError(Exception):
@@ -15,67 +14,105 @@ class Product(db.Model):
     quantity = db.Column(db.Float, nullable=False, default=0)
     unit = db.Column(db.String(20), nullable=False)
     minimum_quantity = db.Column(db.Float, default=0)
-    
-    location_type = db.Column(db.String(20), nullable=False)  # 'workspace' or 'cabinet'
-    location_number = db.Column(db.String(20))  # cabinet number
-    location_position = db.Column(db.String(10))  # 'upper'/'lower' or None
-    
+    location_type = db.Column(db.String(20), nullable=False)
+    location_number = db.Column(db.String(20))
+    location_position = db.Column(db.String(10))
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Optimistic locking alanı
     version_id = db.Column(db.Integer, nullable=False, default=0)
-
-    # Foreign key
     lab_id = db.Column(db.Integer, db.ForeignKey('lab.id'), nullable=False)
-
-    # Relationships
-    transfer_logs = db.relationship('TransferLog', backref='transferred_product')
 
     @validates('quantity')
     def validate_quantity(self, key, value):
-        if value < 0:
+        if value<0:
             raise ValueError("Quantity cannot be negative")
         return value
 
     @validates('location_type')
     def validate_location_type(self, key, value):
-        if value not in ['workspace', 'cabinet']:
+        if value not in ['workspace','cabinet']:
             raise ValueError("Invalid location type")
         return value
 
     @validates('location_position')
     def validate_location_position(self, key, value):
-        if self.location_type == 'cabinet' and value not in ['upper', 'lower', None]:
+        if self.location_type=='cabinet' and value not in ['upper','lower', None]:
             raise ValueError("Cabinet position must be 'upper' or 'lower'")
-        if self.location_type == 'workspace' and value is not None:
-            # workspace için location_position = None olmalı
-            raise ValueError("Workspace items should not have a position")
+        if self.location_type=='workspace' and value is not None:
+            raise ValueError("Workspace items should not have a location_position")
         return value
 
-    def get_location_display(self):
-        """Get a human-readable location string."""
-        if self.location_type == 'workspace':
-            return "Çalışma Alanı"
+    def update_record(self, data: dict):
+        """
+        Update product fields from a dict (like form data),
+        then commit. Also increment version for concurrency check.
+        """
+        self.name = data.get('name', self.name)
+        self.registry_number = data.get('registry_number', self.registry_number)
+        self.quantity = float(data.get('quantity', self.quantity))
+        self.unit = data.get('unit', self.unit)
+        self.minimum_quantity = float(data.get('minimum_quantity', self.minimum_quantity))
+        loc_value = data.get('location_number', 'workspace').split('-')
+        if loc_value[0]=='workspace':
+            self.location_type='workspace'
+            self.location_number=None
+            self.location_position=None
         else:
-            pos_text = 'Üst' if self.location_position == 'upper' else 'Alt'
-            return f"Dolap No: {self.location_number} - {pos_text}"
-
-    def update_quantity(self, new_quantity):
-        """Example method for optimistic locking usage."""
-        current_version = self.version_id
-        self.quantity = new_quantity
+            self.location_type='cabinet'
+            self.location_number=loc_value[1]
+            self.location_position=loc_value[2]
+        self.notes = data.get('notes', self.notes)
+        # concurrency
+        old_version = self.version_id
         self.version_id += 1
         try:
             db.session.commit()
         except:
             db.session.rollback()
-            # Veritabanından güncel bilgiyi çek
             db.session.refresh(self)
-            if self.version_id != current_version:
-                raise ConcurrencyError("Product was modified by another user")
+            if self.version_id!=old_version+1:
+                raise ConcurrencyError("Product was modified by another user.")
             raise
+
+    def get_location_display(self):
+        if self.location_type=='workspace':
+            return "Çalışma Alanı"
+        pos_text='Üst' if self.location_position=='upper' else 'Alt'
+        return f"Dolap No: {self.location_number} - {pos_text}"
+
+    def check_stock_level(self):
+        """
+        Stok seviyesini kontrol eder.
+        Returns: 
+            - 'low' if quantity <= minimum_quantity
+            - 'out' if quantity == 0
+            - 'ok' otherwise
+        """
+        if self.quantity == 0:
+            return 'out'
+        elif self.quantity <= self.minimum_quantity:
+            return 'low'
+        return 'ok'
+
+    @classmethod
+    def search(cls, query, lab_id=None):
+        """
+        Ürün adı veya sicil numarasına göre arama yapar
+        """
+        search = f"%{query}%"
+        base_query = cls.query.filter(
+            db.or_(
+                cls.name.ilike(search),
+                cls.registry_number.ilike(search)
+            )
+        )
+        
+        if lab_id:
+            base_query = base_query.filter(cls.lab_id == lab_id)
+            
+        return base_query.order_by(cls.name).all()
 
     def __repr__(self):
         return f'<Product {self.registry_number}>'
