@@ -92,6 +92,12 @@
                                 <div class="btn-group">
                                     <a href="{{ url_for('main.edit_product', id=product.id) }}" 
                                        class="btn btn-sm btn-outline-primary">Edit</a>
+                                    {% if current_user.is_editor() %}
+                                    <div class="btn-group">
+                                        <a href="{{ url_for('main.transfer_product', product_id=product.id) }}" 
+                                           class="btn btn-sm btn-outline-info">Transfer This</a>
+                                    </div>
+                                    {% endif %}
                                     {% if current_user.role == 'admin' %}
                                     <button type="button" class="btn btn-sm btn-outline-danger" 
                                             data-bs-toggle="modal" data-bs-target="#deleteModal{{ product.id }}">

@@ -84,17 +84,28 @@ class ProductForm(FlaskForm):
 
 class TransferForm(FlaskForm):
     """
-    Bir ürünü bir laboratuvardan diğerine aktarmak için gereken form.
+    Bir ürünü bir laboratuvardan diğerine aktarmak için form.
     """
-    product_id = SelectField('Product', coerce=int, validators=[DataRequired()])
+    destination_lab_id = SelectField('Destination Laboratory', coerce=int, validators=[DataRequired()])
     quantity = FloatField('Quantity to Transfer', validators=[
         DataRequired(),
-        NumberRange(min=0.01, message="Transfer quantity must be > 0")
+        NumberRange(min=0.01, message="Transfer quantity must be greater than 0")
     ])
-    source_lab_id = SelectField('Source Lab', coerce=int, validators=[DataRequired()])
-    destination_lab_id = SelectField('Destination Lab', coerce=int, validators=[DataRequired()])
     notes = TextAreaField('Notes')
-    submit = SubmitField('Transfer')
+    submit = SubmitField('Confirm Transfer')
+
+    def __init__(self, *args, source_lab_id=None, max_quantity=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if source_lab_id:
+            # Exclude source lab from destination choices
+            self.destination_lab_id.choices = [
+                (lab.id, f"{lab.code} - {lab.description}")
+                for lab in Lab.query.filter(Lab.id != source_lab_id).all()
+            ]
+        if max_quantity:
+            self.quantity.validators.append(
+                NumberRange(max=max_quantity, message=f"Cannot transfer more than available quantity ({max_quantity})")
+            )
 
 
 class LabForm(FlaskForm):

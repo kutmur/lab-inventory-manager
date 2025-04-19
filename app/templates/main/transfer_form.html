@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="h5 mb-0">Transfer Product</h2>
+                </div>
+                <div class="card-body">
+                    {% if product and product.lab %}
+                    <div class="mb-4">
+                        <h6>Product Details:</h6>
+                        <p class="mb-1"><strong>Name:</strong> {{ product.name }}</p>
+                        <p class="mb-1"><strong>Registry Number:</strong> {{ product.registry_number }}</p>
+                        <p class="mb-1"><strong>Current Location:</strong> {{ product.lab.code }}</p>
+                        <p class="mb-1"><strong>Available Quantity:</strong> {{ product.quantity }} {{ product.unit }}</p>
+                    </div>
+                    {% endif %}
+
+                    <form method="POST">
+                        {{ form.hidden_tag() }}
+                        
+                        <div class="mb-3">
+                            {{ form.destination_lab_id.label(class="form-label") }}
+                            {{ form.destination_lab_id(class="form-control") }}
+                            {% for error in form.destination_lab_id.errors %}
+                                <div class="text-danger">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+
+                        <div class="mb-3">
+                            {{ form.quantity.label(class="form-label") }}
+                            {{ form.quantity(class="form-control", type="number", step="0.01", min="0.01", max=product.quantity if product else 9999) }}
+                            {% for error in form.quantity.errors %}
+                                <div class="text-danger">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+
+                        <div class="mb-3">
+                            {{ form.notes.label(class="form-label") }}
+                            {{ form.notes(class="form-control") }}
+                            {% for error in form.notes.errors %}
+                                <div class="text-danger">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+
+                        {{ form.submit(class="btn btn-primary") }}
+                        <a href="{{ url_for('main.dashboard') }}" class="btn btn-secondary">Cancel</a>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

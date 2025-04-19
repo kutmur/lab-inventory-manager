@@ -24,6 +24,13 @@ class Product(db.Model):
     version_id = db.Column(db.Integer, nullable=False, default=0)
     lab_id = db.Column(db.Integer, db.ForeignKey('lab.id'), nullable=False)
 
+    @validates('registry_number')
+    def validate_registry_number(self, key, value):
+        if not value:
+            raise ValueError("Registry number cannot be empty")
+        # Strip any whitespace to ensure clean values
+        return value.strip()
+
     @validates('quantity')
     def validate_quantity(self, key, value):
         if value<0:

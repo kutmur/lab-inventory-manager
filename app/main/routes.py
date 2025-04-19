@@ -11,6 +11,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from sqlalchemy.exc import IntegrityError
 
 from app.main import bp
 from app.main.forms import ProductForm, TransferForm, LabForm
@@ -120,28 +121,24 @@ def dashboard():
 @bp.route('/product/add', methods=['GET', 'POST'])
 @login_required
 def add_product():
-    """
-    Yeni bir ürün eklemek için form.
-    'Location' bilgisi (workspace veya cabinet-x-upper/lower) parse ediliyor.
-    """
     form = ProductForm()
-    labs = Lab.get_predefined_labs()  # JS tarafında konum seçeneği oluşturmak için
+    labs = Lab.get_predefined_labs()
 
     if form.validate_on_submit():
         try:
-            # Seçilen laboratuvarı al
+            # Laboratuvar kontrolü
             selected_lab = Lab.query.get(form.lab_id.data)
             if not selected_lab:
-                flash('Please select a valid laboratory.', 'error')
-                return render_template('main/product_form.html', form=form, title='Add Product', labs=labs)
+                flash('Lütfen geçerli bir laboratuvar seçin.', 'error')
+                return render_template('main/product_form.html', form=form, title='Ürün Ekle', labs=labs)
 
-            # Registry number eşsiz mi, kontrol edelim
-            existing_p = Product.query.filter_by(registry_number=form.registry_number.data).first()
-            if existing_p:
-                flash('A product with this registry number already exists.', 'error')
-                return render_template('main/product_form.html', form=form, title='Add Product', labs=labs)
+            # Sicil numarası kontrolü
+            existing_product = Product.query.filter_by(registry_number=form.registry_number.data).first()
+            if existing_product:
+                flash('Bu sicil numarasına sahip bir ürün zaten mevcut.', 'error')
+                return render_template('main/product_form.html', form=form, title='Ürün Ekle', labs=labs)
 
-            # Konum parse (workspace veya cabinet-<num>-upper/lower)
+            # Konum bilgisi ayrıştırma
             loc_parts = form.location_number.data.split('-')
             if loc_parts[0] == 'workspace':
                 location_type = 'workspace'
@@ -152,60 +149,67 @@ def add_product():
                 location_number = loc_parts[1]
                 location_position = loc_parts[2]
 
-            # Yeni ürün nesnesi
-            product = Product(
-                name=form.name.data,
-                registry_number=form.registry_number.data,
-                quantity=form.quantity.data,
-                unit=form.unit.data,
-                minimum_quantity=form.minimum_quantity.data,
-                location_type=location_type,
-                location_number=location_number,
-                location_position=location_position,
-                notes=form.notes.data,
-                lab_id=selected_lab.id
-            )
-
+            try:
+                product = Product(
+                    name=form.name.data,
+                    registry_number=form.registry_number.data,
+                    quantity=float(form.quantity.data),
+                    unit=form.unit.data,
+                    minimum_quantity=float(form.minimum_quantity.data),
+                    location_type=location_type,
+                    location_number=location_number,
+                    location_position=location_position,
+                    notes=form.notes.data,
+                    lab_id=selected_lab.id
+                )
+            except ValueError as ve:
+                current_app.logger.error(f"Validation error while creating product: {str(ve)}")
+                flash(f'Doğrulama hatası: {str(ve)}', 'error')
+                return render_template('main/product_form.html', form=form, title='Ürün Ekle', labs=labs)
+            
             db.session.add(product)
-            db.session.flush()
-
-            # Log kaydı
+            
+            # Kullanıcı logu oluştur
             create_user_log(
                 user=current_user,
                 action_type='add',
                 product=product,
                 lab=selected_lab,
                 quantity=product.quantity,
-                notes=f"Added new product: {product.name}"
+                notes=f"Yeni ürün eklendi: {product.name}"
             )
 
-            db.session.commit()
+            try:
+                db.session.commit()
+            except Exception as dbe:
+                db.session.rollback()
+                current_app.logger.error(f"Database error while adding product: {str(dbe)}")
+                flash(f'Veritabanı hatası: {str(dbe)}', 'error')
+                return render_template('main/product_form.html', form=form, title='Ürün Ekle', labs=labs)
 
-            # WebSocket ile duyuru
+            # WebSocket bildirimi gönder
             notify_inventory_update(product.id, 'add', {
                 'name': product.name,
                 'registry_number': product.registry_number,
                 'quantity': product.quantity,
-                'lab_id': product.lab_id,
-                'location_type': product.location_type,
-                'location_number': product.location_number,
-                'location_position': product.location_position
+                'lab_id': product.lab_id
             })
 
-            flash(f'Product "{product.name}" added successfully to {selected_lab.name}!', 'success')
+            flash(f'Ürün "{product.name}" başarıyla eklendi!', 'success')
             return redirect(url_for('main.dashboard'))
 
         except Exception as e:
             db.session.rollback()
-            current_app.logger.error(f"Error adding product: {str(e)}")
-            flash('An error occurred while adding the product. Please try again.', 'error')
+            current_app.logger.error(f"Unexpected error while adding product: {str(e)}")
+            flash(f'Beklenmeyen hata: {str(e)}', 'error')
+            return render_template('main/product_form.html', form=form, title='Ürün Ekle', labs=labs)
 
     if form.errors:
         for field, errors in form.errors.items():
             for error in errors:
                 flash(f'{getattr(form, field).label.text}: {error}', 'error')
 
-    return render_template('main/product_form.html', form=form, title='Add Product', labs=labs)
+    return render_template('main/product_form.html', form=form, title='Ürün Ekle', labs=labs)
 
 
 @bp.route('/product/<int:id>/edit', methods=['GET', 'POST'])
@@ -326,6 +330,122 @@ def delete_product(id):
     return redirect(url_for('main.dashboard'))
 
 
+@bp.route('/product/<int:product_id>/transfer', methods=['GET', 'POST'])
+@login_required
+def transfer_product(product_id):
+    """Transfer a product between labs"""
+    # First get the source product with its lab
+    source_product = Product.query.join(Lab).filter(Product.id == product_id).first_or_404()
+    
+    if not source_product.lab:
+        flash('Error: Source product has no associated laboratory.', 'danger')
+        return redirect(url_for('main.dashboard'))
+    
+    # Get available destination labs (excluding source lab)
+    destination_labs = Lab.query.filter(Lab.id != source_product.lab_id).all()
+    if not destination_labs:
+        flash('No available destination laboratories for transfer.', 'danger')
+        return redirect(url_for('main.dashboard'))
+    
+    form = TransferForm(source_lab_id=source_product.lab_id, max_quantity=source_product.quantity)
+    form.destination_lab_id.choices = [(lab.id, f"{lab.code} - {lab.description}") for lab in destination_labs]
+
+    if form.validate_on_submit():
+        target_lab_id = form.destination_lab_id.data
+        transfer_quantity = form.quantity.data
+        notes = form.notes.data
+
+        try:
+            # Validate destination lab exists
+            destination_lab = Lab.query.get(target_lab_id)
+            if not destination_lab:
+                flash('Selected destination laboratory does not exist.', 'danger')
+                return render_template('main/transfer_form.html', title='Transfer Product', form=form, product=source_product)
+
+            # Check for existing product in destination lab with cleaned registry number
+            clean_registry = source_product.registry_number.strip()
+            target_product_exists = Product.query.filter_by(
+                lab_id=target_lab_id,
+                registry_number=clean_registry
+            ).first()
+
+            # Validate transfer quantity
+            if transfer_quantity > source_product.quantity:
+                flash('Transfer quantity cannot exceed available quantity!', 'danger')
+                return render_template('main/transfer_form.html', title='Transfer Product', form=form, product=source_product)
+                
+            if transfer_quantity <= 0:
+                flash('Transfer quantity must be positive!', 'danger')
+                return render_template('main/transfer_form.html', title='Transfer Product', form=form, product=source_product)
+
+            with db.session.begin_nested():
+                if target_product_exists:
+                    target_product_exists.quantity += transfer_quantity
+                else:
+                    target_product_exists = Product(
+                        name=source_product.name,
+                        registry_number=clean_registry,  # Use cleaned registry number
+                        quantity=transfer_quantity,
+                        unit=source_product.unit,
+                        minimum_quantity=source_product.minimum_quantity,
+                        location_type='workspace',
+                        location_number=None,
+                        location_position=None,
+                        notes=notes or source_product.notes,
+                        lab_id=target_lab_id
+                    )
+                    db.session.add(target_product_exists)
+
+                source_product.quantity -= transfer_quantity
+
+                # Use safe lab references for logs
+                transfer_log = TransferLog(
+                    product_id=source_product.id,
+                    source_lab_id=source_product.lab_id,
+                    destination_lab_id=target_lab_id,
+                    quantity=transfer_quantity,
+                    notes=f"Transferred from {source_product.lab.code} to {destination_lab.code}",
+                    created_by_id=current_user.id
+                )
+                db.session.add(transfer_log)
+
+                create_user_log(
+                    user=current_user,
+                    action_type='transfer',
+                    product=source_product,
+                    lab=source_product.lab,
+                    quantity=-transfer_quantity,
+                    notes=f"Transferred {transfer_quantity} {source_product.unit} to {destination_lab.code}"
+                )
+                create_user_log(
+                    user=current_user,
+                    action_type='transfer',
+                    product=target_product_exists,
+                    lab=destination_lab,
+                    quantity=transfer_quantity,
+                    notes=f"Received {transfer_quantity} {source_product.unit} from {source_product.lab.code}"
+                )
+
+                db.session.commit()
+
+            notify_inventory_update(source_product.id, 'transfer', {
+                'name': source_product.name,
+                'quantity': source_product.quantity,
+                'source_lab': source_product.lab_id,
+                'destination_lab': target_lab_id
+            })
+
+            flash('Product transferred successfully!', 'success')
+            return redirect(url_for('main.dashboard'))
+
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Error during transfer: {str(e)}', 'danger')
+            return render_template('main/transfer_form.html', title='Transfer Product', form=form, product=source_product)
+
+    return render_template('main/transfer_form.html', title='Transfer Product', form=form, product=source_product)
+
+
 #######################################################################
 #  - - -  BU İKİ ROUTE LAB-ID BAZLI DÜZENLEME/SİLME İSTEYENLER İÇİN - -
 #######################################################################
@@ -433,7 +553,7 @@ def delete_lab_product(lab_id, product_id):
 
 @bp.route('/transfer', methods=['GET', 'POST'])
 @login_required
-def transfer_product():
+def transfer_between_labs():
     """
     Transfer formu: Source Lab -> Destination Lab.
     """
@@ -446,31 +566,40 @@ def transfer_product():
         source_lab_id = form.source_lab_id.data
         destination_lab_id = form.destination_lab_id.data
 
+        # Validate source and destination labs exist
+        source_lab = Lab.query.get(source_lab_id)
+        destination_lab = Lab.query.get(destination_lab_id)
+        
+        if not source_lab or not destination_lab:
+            flash('Invalid source or destination laboratory.', 'error')
+            return redirect(url_for('main.transfer_between_labs'))
+
         if source_lab_id == destination_lab_id:
             flash('Source and destination labs cannot be the same.', 'error')
-            return redirect(url_for('main.transfer_product'))
+            return redirect(url_for('main.transfer_between_labs'))
 
         try:
             db.session.begin_nested()
 
+            # Validate product exists and belongs to source lab
             product = Product.query.get_or_404(form.product_id.data)
-            if product.lab_id != source_lab_id:
+            if not product or product.lab_id != source_lab_id:
                 flash('Selected product does not belong to the source lab.', 'error')
                 db.session.rollback()
-                return redirect(url_for('main.transfer_product'))
+                return redirect(url_for('main.transfer_between_labs'))
 
             transfer_qty = form.quantity.data
             if product.quantity < transfer_qty:
                 flash('Insufficient quantity in the source lab.', 'error')
                 db.session.rollback()
-                return redirect(url_for('main.transfer_product'))
+                return redirect(url_for('main.transfer_between_labs'))
 
             # Kaynaktan düş
             old_quantity = product.quantity
             product.quantity = old_quantity - transfer_qty
             db.session.flush()  # henüz commit değil
 
-            # Hedef lab’da aynı registry_number varsa ekle, yoksa yeni oluştur
+            # Hedef lab'da aynı registry_number varsa ekle, yoksa yeni oluştur
             dest_product = Product.query.filter_by(registry_number=product.registry_number, lab_id=destination_lab_id).first()
             if dest_product:
                 dest_product.quantity += transfer_qty
@@ -489,34 +618,34 @@ def transfer_product():
                 )
                 db.session.add(dest_product)
 
-            # Transfer Log
+            # Transfer Log - using safe lab codes
             transfer_log = TransferLog(
                 product_id=product.id,
                 source_lab_id=source_lab_id,
                 destination_lab_id=destination_lab_id,
                 quantity=transfer_qty,
-                notes=form.notes.data,
+                notes=f"Transferred from {source_lab.code} to {destination_lab.code}",
                 created_by_id=current_user.id
             )
             db.session.add(transfer_log)
 
-            # UserLog (source)
+            # UserLog (source) - using safe lab codes
             create_user_log(
                 user=current_user,
                 action_type='transfer',
                 product=product,
-                lab=product.lab,
+                lab=source_lab,
                 quantity=-transfer_qty,
-                notes=f"Transferred out {transfer_qty} from {product.lab.code} to lab_id={destination_lab_id}"
+                notes=f"Transferred out {transfer_qty} from {source_lab.code} to {destination_lab.code}"
             )
-            # UserLog (destination)
+            # UserLog (destination) - using safe lab codes
             create_user_log(
                 user=current_user,
                 action_type='transfer',
                 product=dest_product,
-                lab=dest_product.lab,
+                lab=destination_lab,
                 quantity=transfer_qty,
-                notes=f"Received {transfer_qty} from {product.lab.code}"
+                notes=f"Received {transfer_qty} from {source_lab.code}"
             )
 
             db.session.commit()

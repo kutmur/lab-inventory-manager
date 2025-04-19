@@ -4,14 +4,16 @@ from flask import Flask
 from config import Config
 from app.extensions import db, login_manager, socketio, migrate
 from app.models import User, Product
+from flask_migrate import upgrade
 
 def create_app(config_class=Config):
     app = Flask(__name__)
     app.config.from_object(config_class)
 
+    # Initialize Flask extensions
     db.init_app(app)
     login_manager.init_app(app)
-    socketio.init_app(app)
+    socketio.init_app(app, cors_allowed_origins="*", async_mode='threading')
     migrate.init_app(app, db)
 
     login_manager.login_view = 'auth.login'
@@ -30,5 +32,9 @@ def create_app(config_class=Config):
     @app.context_processor
     def inject_models():
         return dict(Product=Product)
+
+    with app.app_context():
+        # Ensure database tables exist
+        db.create_all()
 
     return app

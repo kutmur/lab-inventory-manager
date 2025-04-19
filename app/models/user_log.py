@@ -12,8 +12,6 @@ class UserLog(db.Model):
     quantity = db.Column(db.Float)  # Miktar değişimi (+/-)
     notes = db.Column(db.Text)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    notification_sent = db.Column(db.Boolean, default=False)  # Bildirim gönderildi mi?
-    notification_type = db.Column(db.String(20))  # 'stock_low', 'stock_out', etc.
 
     # Relationships
     product = db.relationship('Product')

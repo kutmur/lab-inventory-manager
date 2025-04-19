@@ -10,14 +10,14 @@ def handle_connect():
     """Client bağlantı olayı"""
     if not current_user.is_authenticated:
         return False
-    emit('status', {'msg': f'{current_user.username} connected'}, broadcast=True)
+    emit('status', {'msg': f'{current_user.username} connected'})
     current_app.logger.info('Client connected')
 
 @socketio.on('disconnect')
 def handle_disconnect():
     """Client bağlantı kopması olayı"""
     if current_user.is_authenticated:
-        emit('status', {'msg': f'{current_user.username} disconnected'}, broadcast=True)
+        emit('status', {'msg': f'{current_user.username} disconnected'})
     current_app.logger.info('Client disconnected')
 
 def notify_inventory_update(product_id, action, data):
@@ -28,12 +28,15 @@ def notify_inventory_update(product_id, action, data):
         action: 'add', 'edit', 'delete', veya 'transfer'
         data: Değişiklik detayları
     """
-    socketio.emit('inventory_update', {
-        'product_id': product_id,
-        'action': action,
-        'data': data,
-        'user': current_user.username
-    }, broadcast=True)
+    try:
+        socketio.emit('inventory_update', {
+            'product_id': product_id,
+            'action': action,
+            'data': data,
+            'user': current_user.username if current_user else 'System'
+        })
+    except Exception as e:
+        current_app.logger.error(f"SocketIO emit error: {str(e)}")
 
 def notify_stock_alert(product, level):
     """
@@ -42,11 +45,14 @@ def notify_stock_alert(product, level):
         product: Product model instance
         level: 'low' veya 'out'
     """
-    socketio.emit('stock_alert', {
-        'product_id': product.id,
-        'product_name': product.name,
-        'lab_code': product.lab.code,
-        'level': level,
-        'quantity': product.quantity,
-        'minimum': product.minimum_quantity
-    }, broadcast=True)
+    try:
+        socketio.emit('stock_alert', {
+            'product_id': product.id,
+            'product_name': product.name,
+            'lab_code': product.lab.code,
+            'level': level,
+            'quantity': product.quantity,
+            'minimum': product.minimum_quantity
+        })
+    except Exception as e:
+        current_app.logger.error(f"SocketIO stock alert error: {str(e)}")
