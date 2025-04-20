@@ -1,7 +1,7 @@
 from flask_wtf import FlaskForm
 from wtforms import (
     StringField,
-    FloatField,
+    IntegerField,
     TextAreaField,
     SelectField,
     SubmitField
@@ -16,18 +16,18 @@ class ProductForm(FlaskForm):
     """
     name = StringField('Product Name', validators=[DataRequired()])
     registry_number = StringField('Registry Number', validators=[DataRequired()])
-    quantity = FloatField('Quantity', validators=[
+    quantity = IntegerField('Quantity', validators=[
         DataRequired(),
-        NumberRange(min=0, message="Quantity must be >= 0")
+        NumberRange(min=0, message="Quantity must be 0 or greater")
     ])
     unit = SelectField('Unit', choices=[
         ('Adet', 'Adet'),
         ('Paket', 'Paket'),
         ('Kutu', 'Kutu')
     ], validators=[DataRequired()])
-    minimum_quantity = FloatField('Minimum Quantity', validators=[
+    minimum_quantity = IntegerField('Minimum Quantity', validators=[
         DataRequired(),
-        NumberRange(min=0, message="Minimum quantity must be >= 0")
+        NumberRange(min=0, message="Minimum quantity must be 0 or greater")
     ])
 
     lab_id = SelectField('Lab', coerce=int, validators=[DataRequired()])
@@ -73,13 +73,13 @@ class ProductForm(FlaskForm):
         return choices
 
     def validate_quantity(self, field):
-        """
-        Ek validasyon: sayının parse edilebildiğinden emin ol.
-        """
+        """Validate quantity is a whole number"""
         try:
-            float(field.data)
+            value = int(field.data)
+            if value != field.data:
+                raise ValueError()
         except (ValueError, TypeError):
-            raise ValidationError('Quantity must be a valid float number')
+            raise ValidationError('Quantity must be a whole number')
 
 
 class TransferForm(FlaskForm):
@@ -87,9 +87,9 @@ class TransferForm(FlaskForm):
     Bir ürünü bir laboratuvardan diğerine aktarmak için form.
     """
     destination_lab_id = SelectField('Destination Laboratory', coerce=int, validators=[DataRequired()])
-    quantity = FloatField('Quantity to Transfer', validators=[
+    quantity = IntegerField('Quantity to Transfer', validators=[
         DataRequired(),
-        NumberRange(min=0.01, message="Transfer quantity must be greater than 0")
+        NumberRange(min=1, message="Transfer quantity must be at least 1")
     ])
     notes = TextAreaField('Notes')
     submit = SubmitField('Confirm Transfer')

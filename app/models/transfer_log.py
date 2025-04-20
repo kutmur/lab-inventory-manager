@@ -5,7 +5,7 @@ from app.extensions import db
 
 class TransferLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    quantity = db.Column(db.Float, nullable=False)
+    quantity = db.Column(db.Integer, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     notes = db.Column(db.Text)
 

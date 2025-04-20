@@ -38,7 +38,7 @@
                         <!-- Quantity -->
                         <div class="mb-3">
                             {{ form.quantity.label(class="form-label") }}
-                            {{ form.quantity(class="form-control") }}
+                            {{ form.quantity(class="form-control", type="number", step="1", min="0") }}
                             {% for error in form.quantity.errors %}
                                 <div class="text-danger">{{ error }}</div>
                             {% endfor %}
@@ -56,7 +56,7 @@
                         <!-- Minimum Quantity -->
                         <div class="mb-3">
                             {{ form.minimum_quantity.label(class="form-label") }}
-                            {{ form.minimum_quantity(class="form-control") }}
+                            {{ form.minimum_quantity(class="form-control", type="number", step="1", min="0") }}
                             {% for error in form.minimum_quantity.errors %}
                                 <div class="text-danger">{{ error }}</div>
                             {% endfor %}

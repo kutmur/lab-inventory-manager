@@ -9,7 +9,7 @@ class UserLog(db.Model):
     action_type = db.Column(db.String(20), nullable=False)  # add, edit, delete, transfer
     product_id = db.Column(db.Integer, db.ForeignKey('product.id'))
     lab_id = db.Column(db.Integer, db.ForeignKey('lab.id'))
-    quantity = db.Column(db.Float)  # Miktar değişimi (+/-)
+    quantity = db.Column(db.Integer)  # Miktar değişimi (+/-), now using integers
     notes = db.Column(db.Text)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 

@@ -2,25 +2,163 @@
 
 import io
 from datetime import datetime
-from flask import render_template, redirect, url_for, flash, request, send_file, current_app
+from flask import render_template, redirect, url_for, flash, request, send_file, current_app, stream_with_context, Response
 from flask_login import login_required, current_user
 from docx import Document
 from docx.shared import Inches
 import pandas as pd
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 from sqlalchemy.exc import IntegrityError
+import pytz
+from sqlalchemy.orm import joinedload
 
 from app.main import bp
 from app.main.forms import ProductForm, TransferForm, LabForm
 from app.auth.decorators import admin_required
 from app.models import Product, Lab, TransferLog, UserLog
-from app.extensions import db
+from app.extensions import db, limiter
 from app.utils import create_user_log
 from app.socket_events import notify_inventory_update, notify_stock_alert
 from app.models.product import ConcurrencyError
+
+
+def format_timestamp(timestamp):
+    """Convert UTC timestamp to Europe/Istanbul timezone"""
+    istanbul_tz = pytz.timezone('Europe/Istanbul')
+    return timestamp.replace(tzinfo=pytz.UTC).astimezone(istanbul_tz)
+
+def generate_excel(data):
+    """Generate Excel file as a stream"""
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df = pd.DataFrame(data)
+        df.to_excel(writer, sheet_name='Lab Inventory', index=False)
+        workbook = writer.book
+        worksheet = writer.sheets['Lab Inventory']
+        
+        header_format = workbook.add_format({
+            'bold': True,
+            'bg_color': '#4F81BD',
+            'font_color': 'white',
+            'border': 1
+        })
+        
+        for col_num, value in enumerate(df.columns.values):
+            worksheet.write(0, col_num, value, header_format)
+            max_len = max(df[value].astype(str).apply(len).max(), len(value))
+            worksheet.set_column(col_num, col_num, max_len + 2)
+    
+    output.seek(0)
+    return output
+
+def generate_pdf(data, lab_code=None):
+    """Generate PDF file as a stream"""
+    buffer = io.BytesIO()
+    
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=72,
+        leftMargin=72,
+        topMargin=72,
+        bottomMargin=72
+    )
+    
+    elements = []
+    styles = getSampleStyleSheet()
+    title_text = f"Lab Inventory Report - {lab_code}" if lab_code else "Full Inventory Report"
+    
+    timestamp = format_timestamp(datetime.utcnow())
+    elements.append(Paragraph(title_text, styles['Title']))
+    elements.append(Paragraph(
+        f"Generated on: {timestamp.strftime('%Y-%m-%d %H:%M')}",
+        styles['Normal']
+    ))
+    
+    # Create table data
+    headers = ['Name', 'Registry #', 'Quantity', 'Unit', 'Min Qty', 'Location', 'Notes']
+    if not lab_code:
+        headers.insert(0, 'Lab')
+    
+    table_data = [headers]
+    for row in data:
+        table_row = [
+            row['Name'],
+            row['Registry Number'],
+            str(row['Quantity']),
+            row['Unit'],
+            str(row['Minimum Quantity']),
+            row['Location'],
+            row['Notes']
+        ]
+        if not lab_code:
+            table_row.insert(0, row.get('Lab', ''))
+        table_data.append(table_row)
+    
+    table = Table(table_data)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+    ]))
+    elements.append(table)
+    
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+def generate_word(data, lab_code=None):
+    """Generate Word document as a stream"""
+    doc = Document()
+    title_text = f"Lab Inventory Report - {lab_code}" if lab_code else "Full Inventory Report"
+    doc.add_heading(title_text, 0)
+    
+    timestamp = format_timestamp(datetime.utcnow())
+    doc.add_paragraph(f"Generated on: {timestamp.strftime('%Y-%m-%d %H:%M')}")
+    
+    headers = ['Name', 'Registry #', 'Quantity', 'Unit', 'Min Qty', 'Location', 'Notes']
+    if not lab_code:
+        headers.insert(0, 'Lab')
+    
+    table = doc.add_table(rows=1, cols=len(headers))
+    table.style = 'Table Grid'
+    header_cells = table.rows[0].cells
+    for i, header in enumerate(headers):
+        header_cells[i].text = header
+    
+    for row in data:
+        row_cells = table.add_row().cells
+        col = 0
+        if not lab_code:
+            row_cells[col].text = row.get('Lab', '')
+            col += 1
+        row_cells[col].text = row['Name']
+        row_cells[col + 1].text = row['Registry Number']
+        row_cells[col + 2].text = str(row['Quantity'])
+        row_cells[col + 3].text = row['Unit']
+        row_cells[col + 4].text = str(row['Minimum Quantity'])
+        row_cells[col + 5].text = row['Location']
+        row_cells[col + 6].text = row['Notes']
+    
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
 
 
 @bp.route('/')
@@ -93,9 +231,8 @@ def manage_users():
 @login_required
 def dashboard():
     """
-    Laboratuvarları listeler. Query param `lab=all` veya `lab=<lab.code>` olabilir.
+    Lists laboratories. Query param `lab=all` or `lab=<lab.code>`.
     """
-    # Tüm predefined labs’i getiriyoruz
     all_labs = Lab.get_predefined_labs()
     selected_lab_code = request.args.get('lab', 'all')
 
@@ -109,17 +246,24 @@ def dashboard():
         else:
             labs_to_show = [selected_lab]
 
+    # Get sorted products for each lab
+    lab_products = {}
+    for lab in labs_to_show:
+        lab_products[lab.id] = Product.get_sorted_products(lab.id)
+
     return render_template(
         'main/dashboard.html',
         title='Dashboard',
         labs=labs_to_show,
         all_labs=all_labs,
-        selected_lab_code=selected_lab_code
+        selected_lab_code=selected_lab_code,
+        lab_products=lab_products
     )
 
 
 @bp.route('/product/add', methods=['GET', 'POST'])
 @login_required
+@limiter.limit("20 per hour")
 def add_product():
     form = ProductForm()
     labs = Lab.get_predefined_labs()
@@ -214,6 +358,7 @@ def add_product():
 
 @bp.route('/product/<int:id>/edit', methods=['GET', 'POST'])
 @login_required
+@limiter.limit("30 per hour")
 def edit_product(id):
     """
     Var olan ürünün düzenlenmesi (global route).
@@ -304,6 +449,7 @@ def edit_product(id):
 @bp.route('/product/<int:id>/delete', methods=['POST'])
 @login_required
 @admin_required
+@limiter.limit("10 per hour")
 def delete_product(id):
     """
     Ürün silme işlemi (admin).
@@ -332,6 +478,7 @@ def delete_product(id):
 
 @bp.route('/product/<int:product_id>/transfer', methods=['GET', 'POST'])
 @login_required
+@limiter.limit("20 per hour")
 def transfer_product(product_id):
     """Transfer a product between labs"""
     # First get the source product with its lab
@@ -676,14 +823,13 @@ def transfer_between_labs():
 
 @bp.route('/export/<lab_code>/<format>')
 @login_required
+@limiter.limit("10 per minute")
 def export_lab(lab_code, format):
-    """
-    Tek bir lab'ın envanterini PDF, Excel veya Word formatında döndürür.
-    lab_code => Lab.code
-    format => pdf / xlsx / docx
-    """
+    """Export lab inventory with streaming response"""
     lab = Lab.query.filter_by(code=lab_code).first_or_404()
-    products = Product.query.filter_by(lab_id=lab.id).all()
+    products = Product.query.filter_by(lab_id=lab.id)\
+        .options(joinedload(Product.lab))\
+        .all()
 
     data = []
     for product in products:
@@ -697,132 +843,51 @@ def export_lab(lab_code, format):
             'Notes': product.notes or ''
         })
 
-    df = pd.DataFrame(data)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = format_timestamp(datetime.utcnow()).strftime('%Y%m%d_%H%M%S')
     filename = f"inventory_{lab.code}_{timestamp}"
 
-    # Excel
     if format == 'xlsx':
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, sheet_name='Lab Inventory', index=False)
-            workbook = writer.book
-            worksheet = writer.sheets['Lab Inventory']
-            header_format = workbook.add_format({
-                'bold': True,
-                'bg_color': '#4F81BD',
-                'font_color': 'white',
-                'border': 1
-            })
-            for col_num, value in enumerate(df.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-                max_len = max(df[value].astype(str).apply(len).max(), len(value))
-                worksheet.set_column(col_num, col_num, max_len + 2)
-        output.seek(0)
-        return send_file(
-            output,
-            download_name=f"{filename}.xlsx",
+        return Response(
+            stream_with_context(generate_excel(data)),
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            as_attachment=True
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}.xlsx"
+            }
         )
 
-    # PDF
     elif format == 'pdf':
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter)
-        elements = []
-        styles = getSampleStyleSheet()
-
-        elements.append(Paragraph(f"Lab Inventory Report - {lab.code}", styles['Title']))
-        elements.append(Paragraph(
-            f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            styles['Normal']
-        ))
-
-        table_data = [
-            ['Name', 'Registry #', 'Quantity', 'Unit', 'Min Qty', 'Location', 'Notes']
-        ]
-        for row in data:
-            table_data.append([
-                row['Name'],
-                row['Registry Number'],
-                str(row['Quantity']),
-                row['Unit'],
-                str(row['Minimum Quantity']),
-                row['Location'],
-                row['Notes']
-            ])
-
-        table = Table(table_data)
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ]))
-        elements.append(table)
-
-        doc.build(elements)
-        buffer.seek(0)
-        return send_file(
-            buffer,
-            download_name=f"{filename}.pdf",
+        return Response(
+            stream_with_context(generate_pdf(data, lab.code)),
             mimetype='application/pdf',
-            as_attachment=True
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}.pdf"
+            }
         )
 
-    # DOCX
     elif format == 'docx':
-        doc = Document()
-        doc.add_heading(f"Lab Inventory Report - {lab.code}", 0)
-        doc.add_paragraph(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-
-        table = doc.add_table(rows=1, cols=7)
-        table.style = 'Table Grid'
-        hdr_cells = table.rows[0].cells
-        headers = ['Name', 'Registry #', 'Quantity', 'Unit', 'Min Qty', 'Location', 'Notes']
-        for i, h in enumerate(headers):
-            hdr_cells[i].text = h
-
-        for row in data:
-            row_cells = table.add_row().cells
-            row_cells[0].text = row['Name']
-            row_cells[1].text = row['Registry Number']
-            row_cells[2].text = str(row['Quantity'])
-            row_cells[3].text = row['Unit']
-            row_cells[4].text = str(row['Minimum Quantity'])
-            row_cells[5].text = row['Location']
-            row_cells[6].text = row['Notes']
-
-        buffer = io.BytesIO()
-        doc.save(buffer)
-        buffer.seek(0)
-
-        return send_file(
-            buffer,
-            download_name=f"{filename}.docx",
+        return Response(
+            stream_with_context(generate_word(data, lab.code)),
             mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            as_attachment=True
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}.docx"
+            }
         )
 
-    else:
-        return "Format not supported", 400
-
+    return "Format not supported", 400
 
 @bp.route('/export/all/<format>')
 @login_required
+@limiter.limit("5 per minute")
 def export_all_labs(format):
-    """
-    Tüm laboratuvarların envanterini PDF, Excel veya Word formatında döndürür.
-    format => pdf / xlsx / docx
-    """
+    """Export all labs inventory with streaming response"""
     labs = Lab.query.all()
     all_data = []
 
     for lab in labs:
-        products = Product.query.filter_by(lab_id=lab.id).all()
+        products = Product.query.filter_by(lab_id=lab.id)\
+            .options(joinedload(Product.lab))\
+            .all()
+            
         for product in products:
             all_data.append({
                 'Lab': f"{lab.code} - {lab.description}",
@@ -839,125 +904,37 @@ def export_all_labs(format):
         flash('No data available to export', 'warning')
         return redirect(url_for('main.dashboard'))
 
-    df = pd.DataFrame(all_data)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = format_timestamp(datetime.utcnow()).strftime('%Y%m%d_%H%M%S')
     filename = f"full_inventory_{timestamp}"
 
-    # 1) XLSX
     if format == 'xlsx':
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, sheet_name='All Labs', index=False)
-            workbook = writer.book
-            worksheet = writer.sheets['All Labs']
-            header_format = workbook.add_format({
-                'bold': True,
-                'bg_color': '#4F81BD',
-                'font_color': 'white',
-                'border': 1
-            })
-            for col_num, value in enumerate(df.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-                max_len = max(df[value].astype(str).apply(len).max(), len(value))
-                worksheet.set_column(col_num, col_num, max_len + 2)
-        output.seek(0)
-        return send_file(
-            output,
-            download_name=f"{filename}.xlsx",
+        return Response(
+            stream_with_context(generate_excel(all_data)),
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            as_attachment=True
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}.xlsx"
+            }
         )
 
-    # 2) PDF
     elif format == 'pdf':
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter)
-        elements = []
-        styles = getSampleStyleSheet()
-
-        elements.append(Paragraph("All Labs Inventory Report", styles['Title']))
-        elements.append(Paragraph(
-            f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            styles['Normal']
-        ))
-
-        table_data = [
-            ['Lab', 'Name', 'Registry #', 'Quantity', 'Unit', 'Min Qty', 'Location', 'Notes']
-        ]
-        for _, row in df.iterrows():
-            table_data.append([
-                row['Lab'],
-                row['Name'],
-                row['Registry Number'],
-                str(row['Quantity']),
-                row['Unit'],
-                str(row['Minimum Quantity']),
-                row['Location'],
-                row['Notes']
-            ])
-
-        table = Table(table_data)
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ]))
-        elements.append(table)
-
-        doc.build(elements)
-        buffer.seek(0)
-        return send_file(
-            buffer,
-            download_name=f"{filename}.pdf",
+        return Response(
+            stream_with_context(generate_pdf(all_data)),
             mimetype='application/pdf',
-            as_attachment=True
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}.pdf"
+            }
         )
 
-    # 3) DOCX
     elif format == 'docx':
-        doc = Document()
-        doc.add_heading("All Labs Inventory Report", 0)
-        doc.add_paragraph(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-
-        table = doc.add_table(rows=1, cols=8)
-        table.style = 'Table Grid'
-        hdr = table.rows[0].cells
-        hdr[0].text = 'Lab'
-        hdr[1].text = 'Name'
-        hdr[2].text = 'Registry #'
-        hdr[3].text = 'Quantity'
-        hdr[4].text = 'Unit'
-        hdr[5].text = 'Min Qty'
-        hdr[6].text = 'Location'
-        hdr[7].text = 'Notes'
-
-        for _, row in df.iterrows():
-            row_cells = table.add_row().cells
-            row_cells[0].text = str(row['Lab'])
-            row_cells[1].text = str(row['Name'])
-            row_cells[2].text = str(row['Registry Number'])
-            row_cells[3].text = str(row['Quantity'])
-            row_cells[4].text = str(row['Unit'])
-            row_cells[5].text = str(row['Minimum Quantity'])
-            row_cells[6].text = str(row['Location'])
-            row_cells[7].text = str(row['Notes'])
-
-        buffer = io.BytesIO()
-        doc.save(buffer)
-        buffer.seek(0)
-
-        return send_file(
-            buffer,
-            download_name=f"{filename}.docx",
+        return Response(
+            stream_with_context(generate_word(all_data)),
             mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            as_attachment=True
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}.docx"
+            }
         )
 
-    else:
-        return "Format not supported", 400
+    return "Format not supported", 400
 
 
 #######################################################################
@@ -981,6 +958,7 @@ def user_logs():
 
 @bp.route('/search')
 @login_required
+@limiter.limit("30 per minute")
 def search_products():
     """
     Ürün adı veya sicil numarasına göre arama yapar

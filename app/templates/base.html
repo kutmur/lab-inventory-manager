@@ -16,6 +16,8 @@
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
             {% for category, message in messages %}
+                {# Map error category to Bootstrap's danger class #}
+                {% set category = 'danger' if category == 'error' else category %}
                 <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
                     {{ message }}
                     <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
@@ -33,5 +35,20 @@
     <!-- Custom JS -->
     <script src="{{ url_for('static', filename='js/notifications.js') }}"></script>
     {% block scripts %}{% endblock %}
+    
+    <!-- Add timezone handling for dates -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment-timezone/0.5.33/moment-timezone.min.js"></script>
+    <script>
+        // Format all dates to Europe/Istanbul timezone
+        document.addEventListener('DOMContentLoaded', function() {
+            const dateElements = document.querySelectorAll('[data-timestamp]');
+            dateElements.forEach(element => {
+                const timestamp = element.getAttribute('data-timestamp');
+                const formattedDate = moment.tz(timestamp, "Europe/Istanbul").format('YYYY-MM-DD HH:mm');
+                element.textContent = formattedDate;
+            });
+        });
+    </script>
 </body>
 </html>

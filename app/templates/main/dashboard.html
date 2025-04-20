@@ -68,74 +68,89 @@
             <h2 class="h5 mb-0">{{ lab.code }} - {{ lab.description }}</h2>
         </div>
         <div class="card-body">
-            <div class="table-responsive">
-                <table class="table table-hover">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Registry #</th>
-                            <th>Quantity</th>
-                            <th>Unit</th>
-                            <th>Location</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for product in lab.products %}
-                        <tr {% if product.quantity <= product.minimum_quantity %}class="table-warning"{% endif %}>
-                            <td>{{ product.name }}</td>
-                            <td>{{ product.registry_number }}</td>
-                            <td>{{ product.quantity }}</td>
-                            <td>{{ product.unit }}</td>
-                            <td>{{ product.get_location_display() }}</td>
-                            <td>
-                                <div class="btn-group">
-                                    <a href="{{ url_for('main.edit_product', id=product.id) }}" 
-                                       class="btn btn-sm btn-outline-primary">Edit</a>
-                                    {% if current_user.is_editor() %}
-                                    <div class="btn-group">
-                                        <a href="{{ url_for('main.transfer_product', product_id=product.id) }}" 
-                                           class="btn btn-sm btn-outline-info">Transfer This</a>
-                                    </div>
-                                    {% endif %}
-                                    {% if current_user.role == 'admin' %}
-                                    <button type="button" class="btn btn-sm btn-outline-danger" 
-                                            data-bs-toggle="modal" data-bs-target="#deleteModal{{ product.id }}">
-                                        Delete
-                                    </button>
-                                    {% endif %}
+            {% set sorted_products = lab_products[lab.id] %}
+            {% if sorted_products %}
+                {% for location_group in sorted_products %}
+                    <div class="location-section mb-4">
+                        <h3 class="h6 bg-light p-2 rounded">Location: {{ location_group.location_display }}</h3>
+                        {% for category, products in location_group.categories.items() %}
+                            <div class="category-section mb-3">
+                                <h4 class="h6 text-muted border-bottom pb-2">{{ category|title }}</h4>
+                                <div class="table-responsive">
+                                    <table class="table table-hover">
+                                        <thead>
+                                            <tr>
+                                                <th>Name</th>
+                                                <th>Registry #</th>
+                                                <th>Quantity</th>
+                                                <th>Unit</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for product in products %}
+                                            <tr {% if product.quantity <= product.minimum_quantity %}class="table-warning"{% endif %}>
+                                                <td>{{ product.name }}</td>
+                                                <td>{{ product.registry_number }}</td>
+                                                <td>{{ product.quantity }}</td>
+                                                <td>{{ product.unit }}</td>
+                                                <td>
+                                                    <div class="btn-group">
+                                                        <a href="{{ url_for('main.edit_product', id=product.id) }}" 
+                                                           class="btn btn-sm btn-outline-primary">Edit</a>
+                                                        {% if current_user.is_editor() %}
+                                                        <a href="{{ url_for('main.transfer_product', product_id=product.id) }}" 
+                                                           class="btn btn-sm btn-outline-info">Transfer</a>
+                                                        {% endif %}
+                                                        {% if current_user.role == 'admin' %}
+                                                        <button type="button" class="btn btn-sm btn-outline-danger" 
+                                                                data-bs-toggle="modal" data-bs-target="#deleteModal{{ product.id }}">
+                                                            Delete
+                                                        </button>
+                                                        {% endif %}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
                                 </div>
-                            </td>
-                        </tr>
+                            </div>
                         {% endfor %}
-                    </tbody>
-                </table>
-            </div>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <div class="alert alert-info">No products found in this lab.</div>
+            {% endif %}
         </div>
     </div>
 
     {% if current_user.role == 'admin' %}
     <!-- Delete Confirmation Modals -->
-    {% for product in lab.products %}
-    <div class="modal fade" id="deleteModal{{ product.id }}" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">Confirm Delete</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    Are you sure you want to delete "{{ product.name }}"?
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <form method="POST" action="{{ url_for('main.delete_product', id=product.id) }}" class="d-inline">
-                        <button type="submit" class="btn btn-danger">Delete</button>
-                    </form>
+    {% for location_group in lab_products[lab.id] %}
+        {% for category, products in location_group.categories.items() %}
+            {% for product in products %}
+            <div class="modal fade" id="deleteModal{{ product.id }}" tabindex="-1">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Confirm Delete</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            Are you sure you want to delete "{{ product.name }}"?
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <form method="POST" action="{{ url_for('main.delete_product', id=product.id) }}" class="d-inline">
+                                <button type="submit" class="btn btn-danger">Delete</button>
+                            </form>
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
-    </div>
+            {% endfor %}
+        {% endfor %}
     {% endfor %}
     {% endif %}
     {% endfor %}
