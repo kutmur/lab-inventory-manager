@@ -13,7 +13,9 @@ from app import create_app, db
 from app.extensions import socketio
 from app.models import User, Lab
 
+
 app = create_app()
+
 
 def init_database():
     """Initialize database with default data"""
@@ -22,7 +24,9 @@ def init_database():
         print("Database tables created fresh.")
 
         # Create admin user from environment variables
-        admin = User.query.filter_by(username=app.config['ADMIN_USERNAME']).first()
+        admin = User.query.filter_by(
+            username=app.config['ADMIN_USERNAME']
+        ).first()
         if not admin:
             admin = User(
                 username=app.config['ADMIN_USERNAME'],
@@ -34,7 +38,9 @@ def init_database():
             print('Admin user created')
 
         # Create editor user from environment variables
-        editor = User.query.filter_by(username=app.config['EDITOR_USERNAME']).first()
+        editor = User.query.filter_by(
+            username=app.config['EDITOR_USERNAME']
+        ).first()
         if not editor:
             editor = User(
                 username=app.config['EDITOR_USERNAME'],
@@ -54,7 +60,9 @@ def init_database():
         except Exception as e:
             db.session.rollback()
             print(f'Error initializing database: {str(e)}')
-            raise
+            return False
+    return True
+
 
 if __name__ == '__main__':
     # Check if this is development environment

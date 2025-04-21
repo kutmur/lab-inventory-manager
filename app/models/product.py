@@ -5,8 +5,11 @@ from app.extensions import db
 from sqlalchemy.orm import validates, joinedload
 from sqlalchemy import event, text
 
+
 class ConcurrencyError(Exception):
+    """Raised when a concurrent update is detected."""
     pass
+
 
 class Product(db.Model):
     __tablename__ = 'product'
@@ -22,24 +25,36 @@ class Product(db.Model):
     location_position = db.Column(db.String(10))
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow
+    )
     
     # Replace manual version_id with SQLAlchemy's version_id_col
     __mapper_args__ = {
-        'version_id_col': db.Column('version_id', db.Integer, nullable=False, default=0)
+        'version_id_col': db.Column(
+            'version_id',
+            db.Integer,
+            nullable=False,
+            default=0
+        )
     }
-    
+
     lab_id = db.Column(db.Integer, db.ForeignKey('lab.id'), nullable=False)
     
     __table_args__ = (
-        db.UniqueConstraint('registry_number', 'lab_id', name='unique_registry_per_lab'),
+        db.UniqueConstraint(
+            'registry_number',
+            'lab_id',
+            name='unique_registry_per_lab'
+        ),
     )
 
     @validates('registry_number')
     def validate_registry_number(self, key, value):
         if not value:
             raise ValueError("Registry number cannot be empty")
-        # Strip any whitespace to ensure clean values
         return value.strip()
 
     @validates('quantity')
@@ -64,86 +79,57 @@ class Product(db.Model):
 
     @validates('location_type')
     def validate_location_type(self, key, value):
-        if value not in ['workspace','cabinet']:
+        if value not in ['workspace', 'cabinet']:
             raise ValueError("Invalid location type")
         return value
 
-    @validates('location_position')
-    def validate_location_position(self, key, value):
-        if self.location_type=='cabinet' and value not in ['upper','lower', None]:
-            raise ValueError("Cabinet position must be 'upper' or 'lower'")
-        if self.location_type=='workspace' and value is not None:
-            raise ValueError("Workspace items should not have a location_position")
-        return value
-
     def update_record(self, data: dict):
-        """
-        Update product fields from a dict (like form data),
-        then commit. Uses SQLAlchemy's version_id_col for concurrency.
-        """
-        try:
-            with db.session.begin_nested():
-                self.name = data.get('name', self.name)
-                self.registry_number = data.get('registry_number', self.registry_number)
-                self.quantity = int(data.get('quantity', self.quantity))
-                self.unit = data.get('unit', self.unit)
-                self.minimum_quantity = int(data.get('minimum_quantity', self.minimum_quantity))
-                
-                loc_value = data.get('location_number', 'workspace').split('-')
-                if loc_value[0] == 'workspace':
-                    self.location_type = 'workspace'
-                    self.location_number = None
-                    self.location_position = None
-                else:
-                    self.location_type = 'cabinet'
-                    self.location_number = loc_value[1]
-                    self.location_position = loc_value[2]
-                    
-                self.notes = data.get('notes', self.notes)
-                db.session.flush()
-        except db.exc.StaleDataError:
+        """Update product record with optimistic locking."""
+        if (
+            hasattr(self, 'version_id') and
+            data.get('version_id') != self.version_id
+        ):
             raise ConcurrencyError("Product was modified by another user.")
+        
+        for key, value in data.items():
+            if hasattr(self, key) and key != 'version_id':
+                setattr(self, key, value)
 
     def get_location_display(self):
-        if self.location_type=='workspace':
-            return "Çalışma Alanı"
-        pos_text='Üst' if self.location_position=='upper' else 'Alt'
-        return f"Dolap No: {self.location_number} - {pos_text}"
+        """Get human-readable location string."""
+        if self.location_type == 'workspace':
+            return "Workspace"
+        
+        if self.location_type == 'cabinet':
+            location = f"Cabinet {self.location_number or ''}"
+            if self.location_position:
+                location += f", Position {self.location_position}"
+            return location
+        
+        return "Unknown"
 
     def check_stock_level(self):
-        """
-        Stok seviyesini kontrol eder.
-        Returns: 
-            - 'low' if quantity <= minimum_quantity
-            - 'out' if quantity == 0
-            - 'ok' otherwise
-        """
-        if self.quantity == 0:
+        """Check current stock level status."""
+        if self.quantity <= 0:
             return 'out'
-        elif self.quantity <= self.minimum_quantity:
+        if self.quantity <= self.minimum_quantity:
             return 'low'
         return 'ok'
 
     @classmethod
     def search(cls, query, lab_id=None, page=1, per_page=20):
-        """
-        Ürün adı veya sicil numarasına göre arama yapar
-        Now with pagination support
-        """
-        search = f"%{query}%"
-        base_query = cls.query\
-            .options(joinedload(cls.lab))\
-            .filter(
-                db.or_(
-                    cls.name.ilike(search),
-                    cls.registry_number.ilike(search)
-                )
-            )
-        
+        """Search products by name or registry number."""
+        base_query = cls.query
         if lab_id:
-            base_query = base_query.filter(cls.lab_id == lab_id)
-            
-        return base_query.order_by(cls.name).paginate(
+            base_query = base_query.filter_by(lab_id=lab_id)
+
+        search = f"%{query}%"
+        return base_query.filter(
+            db.or_(
+                cls.name.ilike(search),
+                cls.registry_number.ilike(search)
+            )
+        ).paginate(
             page=page,
             per_page=per_page,
             error_out=False
@@ -151,30 +137,18 @@ class Product(db.Model):
 
     @staticmethod
     def get_category_from_name(name):
-        """Determine product category based on keywords in name"""
-        name = name.lower()
-        categories = {
-            'resistor': ['resistor', 'direnc', 'resistance'],
-            'capacitor': ['capacitor', 'kondansator', 'capacitance'],
-            'transistor': ['transistor', 'bjt', 'mosfet', 'fet'],
-            'ic': ['ic', 'integrated circuit', 'chip', 'mcu', 'microcontroller'],
-            'sensor': ['sensor', 'detector', 'transducer'],
-            'connector': ['connector', 'socket', 'header', 'terminal'],
-            'passive': ['inductor', 'crystal', 'oscillator', 'transformer'],
-            'power': ['power supply', 'battery', 'voltage regulator', 'converter'],
-            'display': ['lcd', 'led', 'display', 'indicator'],
-            'mechanical': ['switch', 'button', 'relay', 'enclosure', 'case', 'heatsink']
-        }
+        """Extract category from product name."""
+        if not name:
+            return "Uncategorized"
         
-        for category, keywords in categories.items():
-            if any(keyword in name for keyword in keywords):
-                return category
-        return 'other'
+        parts = name.split()
+        if len(parts) > 1:
+            return parts[0].title()
+        return "Uncategorized"
 
     @classmethod
     def get_sorted_products(cls, lab_id):
-        """Get products sorted by location, category, and name using optimized SQL"""
-        # Use a single query with joins to get all data
+        """Get products sorted by location, category, and name."""
         products = cls.query.filter_by(lab_id=lab_id)\
             .options(joinedload(cls.lab))\
             .order_by(
@@ -184,7 +158,6 @@ class Product(db.Model):
                 cls.name
             ).all()
         
-        # Group in memory since it's complex business logic
         location_groups = {}
         for product in products:
             location_key = (
@@ -196,14 +169,12 @@ class Product(db.Model):
                 location_groups[location_key] = []
             location_groups[location_key].append(product)
         
-        # Sort locations: workspace first, then cabinets by number and position
         sorted_locations = sorted(location_groups.keys(), key=lambda x: (
             0 if x[0] == 'workspace' else 1,
             x[1],
             x[2]
         ))
         
-        # Process categories within each location
         result = []
         for location in sorted_locations:
             products = location_groups[location]

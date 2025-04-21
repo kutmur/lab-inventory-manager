@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+"""Flask application entry point for production deployment."""
+
 from app import create_app
 
 app = create_app()

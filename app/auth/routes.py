@@ -5,9 +5,19 @@ from app.auth.forms import LoginForm
 from app.models.user import User
 from app.extensions import db, limiter
 
+
 @bp.route('/login', methods=['GET', 'POST'])
 @limiter.limit("5 per minute")  # Protect against brute force
 def login():
+    """Handle user login.
+    
+    GET: Display login form
+    POST: Process login form submission
+    
+    Returns:
+        GET: Rendered login template
+        POST: Redirect to dashboard on success or login page on failure
+    """
     if current_user.is_authenticated:
         return redirect(url_for('main.dashboard'))
     
@@ -16,9 +26,15 @@ def login():
         user = User.query.filter_by(username=form.username.data).first()
         if user is None or not user.check_password(form.password.data):
             flash('Invalid username or password', 'error')
-            return render_template('auth/login.html', form=form, title='Sign In')
+            return render_template(
+                'auth/login.html',
+                form=form,
+                title='Sign In'
+            )
         
         login_user(user, remember=form.remember_me.data)
+        user.update_last_login()  # Update last login timestamp
+        
         next_page = request.args.get('next')
         if not next_page or not next_page.startswith('/'):
             next_page = url_for('main.dashboard')
@@ -26,8 +42,16 @@ def login():
     
     return render_template('auth/login.html', form=form, title='Sign In')
 
+
 @bp.route('/logout')
 @login_required
 def logout():
+    """Handle user logout.
+    
+    Logs out the current user and redirects to home page.
+    
+    Returns:
+        Redirect to index page
+    """
     logout_user()
     return redirect(url_for('main.index'))

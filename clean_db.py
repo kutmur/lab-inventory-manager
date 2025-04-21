@@ -8,32 +8,33 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def clean_database():
-    """Clean test products and related logs from database while preserving users and labs"""
-    try:
-        app = create_app()
-        with app.app_context():
-            # Delete all transfer logs first (due to foreign key constraints)
-            transfer_count = TransferLog.query.delete()
-            logger.info(f"Deleted {transfer_count} transfer logs")
-
-            # Delete all user logs related to products
-            user_log_count = UserLog.query.filter(UserLog.product_id.isnot(None)).delete()
-            logger.info(f"Deleted {user_log_count} product-related user logs")
-
-            # Delete all products
-            product_count = Product.query.delete()
-            logger.info(f"Deleted {product_count} products")
-
-            # Commit the changes
+    """Clean test products and related logs from database.
+    
+    This function preserves users and labs while removing:
+    - All products
+    - All transfer logs
+    - All user activity logs
+    
+    Returns:
+        bool: True if cleanup successful, False otherwise
+    """
+    app = create_app()
+    
+    with app.app_context():
+        try:
+            # Delete in correct order to maintain referential integrity
+            UserLog.query.delete()
+            TransferLog.query.delete()
+            Product.query.delete()
+            
             db.session.commit()
-            logger.info("Database cleaned successfully")
+            logger.info('Database cleaned successfully')
             return True
-
-    except Exception as e:
-        logger.error(f"Error cleaning database: {str(e)}")
-        if 'db' in locals():
+            
+        except Exception as e:
             db.session.rollback()
-        return False
+            logger.error(f'Error cleaning database: {str(e)}')
+            return False
 
 if __name__ == '__main__':
     success = clean_database()

@@ -4,6 +4,7 @@ from app.extensions import db
 from sqlalchemy import event
 from sqlalchemy.exc import IntegrityError
 
+
 class Lab(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     code = db.Column(db.String(20), unique=True, nullable=False)
@@ -26,15 +27,36 @@ class Lab(db.Model):
 
     @classmethod
     def get_predefined_labs(cls):
-        for code,name,desc,maxc in cls.PREDEFINED_LABS:
+        """Create predefined labs if they don't exist."""
+        for code, name, desc, maxc in cls.PREDEFINED_LABS:
             lab = cls.query.filter_by(code=code).first()
             if not lab:
-                lab = cls(code=code, name=name, description=desc, max_cabinets=maxc)
+                lab = cls(
+                    code=code,
+                    name=name,
+                    description=desc,
+                    max_cabinets=maxc
+                )
                 db.session.add(lab)
         db.session.commit()
-        return cls.query.filter(cls.code.in_([c for c,_,_,_ in cls.PREDEFINED_LABS])).all()
+        return cls.query.filter(
+            cls.code.in_([c for c, _, _, _ in cls.PREDEFINED_LABS])
+        ).all()
+
+    def __repr__(self):
+        return f'<Lab {self.code}>'
+
 
 @event.listens_for(Lab, 'before_insert')
 def validate_lab_code(mapper, connection, target):
+    """Ensure lab code is unique before insert."""
     if not target.code:
         raise IntegrityError("Lab code cannot be empty", None, None)
+    
+    # Check for duplicate code
+    if Lab.query.filter_by(code=target.code).first():
+        raise IntegrityError(
+            f"Lab with code {target.code} already exists",
+            None,
+            None
+        )

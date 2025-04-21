@@ -11,6 +11,7 @@ if not os.path.exists(env_path):
     env_path = os.path.join(os.path.dirname(__file__), '.env.development')
 load_dotenv(env_path)
 
+
 class Config:
     """Base configuration class"""
     SECRET_KEY = os.environ.get('SECRET_KEY')
@@ -19,10 +20,15 @@ class Config:
             raise ValueError("SECRET_KEY must be set in production")
         SECRET_KEY = 'dev-secret-key'
 
-    # Fix Render's DATABASE_URL if needed (they use postgres:// instead of postgresql://)
+    # Fix Render's DATABASE_URL if needed
     SQLALCHEMY_DATABASE_URL = os.environ.get('DATABASE_URL')
-    if SQLALCHEMY_DATABASE_URL and SQLALCHEMY_DATABASE_URL.startswith('postgres://'):
-        SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+    if (SQLALCHEMY_DATABASE_URL and
+            SQLALCHEMY_DATABASE_URL.startswith('postgres://')):
+        SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace(
+            'postgres://',
+            'postgresql://',
+            1
+        )
     
     SQLALCHEMY_DATABASE_URI = SQLALCHEMY_DATABASE_URL or 'sqlite:///app.db'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
@@ -78,12 +84,12 @@ class Config:
     SESSION_COOKIE_HTTPONLY = True
     REMEMBER_COOKIE_HTTPONLY = True
 
+
 class ProductionConfig(Config):
     """Production configuration"""
     DEBUG = False
     TESTING = False
     
-    # Enhanced database configuration for production
     @property
     def SQLALCHEMY_DATABASE_URI(self):
         # Fix Render's DATABASE_URL if needed
@@ -94,7 +100,6 @@ class ProductionConfig(Config):
             raise ValueError("DATABASE_URL must be set in production")
         return uri
     
-    # Production-specific Redis configuration
     @property
     def REDIS_URL(self):
         redis_url = os.environ.get('REDIS_URL')
@@ -116,18 +121,21 @@ class ProductionConfig(Config):
     # Production logging
     LOG_TO_STDOUT = os.environ.get('LOG_TO_STDOUT', 'true').lower() == 'true'
 
+
 class DevelopmentConfig(Config):
     """Development configuration"""
     DEBUG = True
     SQLALCHEMY_DATABASE_URI = 'sqlite:///app.db'
     RATELIMIT_STORAGE_URL = 'memory://'  # Memory storage in development
 
+
 class TestingConfig(Config):
     """Testing configuration"""
     TESTING = True
-    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'  # Use in-memory database for tests
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'  # Use in-memory database
     WTF_CSRF_ENABLED = False  # Disable CSRF protection in tests
     RATELIMIT_ENABLED = False  # Disable rate limiting in tests
+
 
 config = {
     'development': DevelopmentConfig,
@@ -135,6 +143,7 @@ config = {
     'testing': TestingConfig,
     'default': DevelopmentConfig
 }
+
 
 def get_config():
     """Get configuration class based on environment"""
