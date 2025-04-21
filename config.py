@@ -13,30 +13,55 @@ load_dotenv(env_path)
 
 class Config:
     """Base configuration class"""
-    SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret-key')
-    WTF_CSRF_SECRET_KEY = os.environ.get('WTF_CSRF_SECRET_KEY', 'dev-csrf-key')
-    SQLALCHEMY_DATABASE_URI = os.environ.get('SQLALCHEMY_DATABASE_URI', 'sqlite:///app.db')
+    SECRET_KEY = os.environ.get('SECRET_KEY')
+    if not SECRET_KEY:
+        if os.environ.get('FLASK_ENV') == 'production':
+            raise ValueError("SECRET_KEY must be set in production")
+        SECRET_KEY = 'dev-secret-key'
+
+    # Fix Render's DATABASE_URL if needed (they use postgres:// instead of postgresql://)
+    SQLALCHEMY_DATABASE_URL = os.environ.get('DATABASE_URL')
+    if SQLALCHEMY_DATABASE_URL and SQLALCHEMY_DATABASE_URL.startswith('postgres://'):
+        SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace('postgres://', 'postgresql://', 1)
+    
+    SQLALCHEMY_DATABASE_URI = SQLALCHEMY_DATABASE_URL or 'sqlite:///app.db'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     DEBUG = os.environ.get('FLASK_ENV') == 'development'
     
+    # Secure cookie settings
+    SESSION_COOKIE_SECURE = os.environ.get('FLASK_ENV') == 'production'
+    SESSION_COOKIE_HTTPONLY = True
+    REMEMBER_COOKIE_SECURE = os.environ.get('FLASK_ENV') == 'production'
+    REMEMBER_COOKIE_HTTPONLY = True
+    
+    # Redis configuration with timeouts
+    REDIS_SOCKET_TIMEOUT = 5
+    REDIS_SOCKET_CONNECT_TIMEOUT = 5
+    REDIS_RETRY_ON_TIMEOUT = True
+    REDIS_MAX_CONNECTIONS = 20
+    
+    # Rate limiting defaults
+    RATELIMIT_DEFAULT = "200 per day;50 per hour"
+    RATELIMIT_HEADERS_ENABLED = True
+    
+    # Redis configuration with fallback
+    REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379')
+    RATELIMIT_STORAGE_URL = REDIS_URL
+    
     # Admin user configuration
     ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
-    ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')
-    ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'admin@example.com')
+    ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
+    ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL')
     
-    # Editor user configuration
+    # Editor user configuration  
     EDITOR_USERNAME = os.environ.get('EDITOR_USERNAME', 'editor')
-    EDITOR_PASSWORD = os.environ.get('EDITOR_PASSWORD', 'editor123')
-    EDITOR_EMAIL = os.environ.get('EDITOR_EMAIL', 'editor@example.com')
+    EDITOR_PASSWORD = os.environ.get('EDITOR_PASSWORD')
+    EDITOR_EMAIL = os.environ.get('EDITOR_EMAIL')
     
     # Rate limiting configuration
-    RATELIMIT_STORAGE_URL = os.environ.get('REDIS_URL', 'memory://')
     RATELIMIT_STRATEGY = 'fixed-window'
     RATELIMIT_HEADERS_ENABLED = True
     RATELIMIT_DEFAULT = "200 per day"
-    
-    # Redis configuration for WebSocket events (if using Redis)
-    REDIS_URL = os.environ.get('REDIS_URL')
     
     # Timezone settings
     TIMEZONE = 'Europe/Istanbul'
@@ -52,14 +77,44 @@ class Config:
     # Security Configuration
     SESSION_COOKIE_HTTPONLY = True
     REMEMBER_COOKIE_HTTPONLY = True
-    SESSION_COOKIE_SECURE = os.environ.get('FLASK_ENV') == 'production'
-    REMEMBER_COOKIE_SECURE = os.environ.get('FLASK_ENV') == 'production'
 
 class ProductionConfig(Config):
     """Production configuration"""
     DEBUG = False
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL')  # PostgreSQL in production
-    RATELIMIT_STORAGE_URL = os.environ.get('REDIS_URL')  # Redis in production
+    TESTING = False
+    
+    # Enhanced database configuration for production
+    @property
+    def SQLALCHEMY_DATABASE_URI(self):
+        # Fix Render's DATABASE_URL if needed
+        uri = os.environ.get('DATABASE_URL')
+        if uri and uri.startswith('postgres://'):
+            uri = uri.replace('postgres://', 'postgresql://', 1)
+        if not uri:
+            raise ValueError("DATABASE_URL must be set in production")
+        return uri
+    
+    # Production-specific Redis configuration
+    @property
+    def REDIS_URL(self):
+        redis_url = os.environ.get('REDIS_URL')
+        if os.environ.get('FLASK_ENV') == 'production' and not redis_url:
+            raise ValueError("REDIS_URL must be set in production")
+        return redis_url or super().REDIS_URL
+    
+    @property
+    def RATELIMIT_STORAGE_URL(self):
+        return self.REDIS_URL
+    
+    # Production security settings
+    SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+    REMEMBER_COOKIE_SECURE = True
+    REMEMBER_COOKIE_HTTPONLY = True
+    REMEMBER_COOKIE_DURATION = 3600 * 24 * 7  # 7 days in production
+    
+    # Production logging
+    LOG_TO_STDOUT = os.environ.get('LOG_TO_STDOUT', 'true').lower() == 'true'
 
 class DevelopmentConfig(Config):
     """Development configuration"""
