@@ -4,14 +4,17 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
+  check:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [3.9, "3.10", "3.11"]
+        python-version: [3.9, "3.10"]
 
     services:
       redis:
@@ -22,18 +25,36 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    
+
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
-        
+
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/requirements-dev.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pytest pytest-cov flake8 mypy
-        
+        pip install -r requirements-dev.txt
+        pip install pip-audit
+
+    - name: Run linting
+      run: flake8 .
+
+    - name: Run type checking
+      run: mypy app
+
+    - name: Run security audit
+      run: pip-audit --fail-on high,critical
+
     - name: Run tests
       run: pytest --cov=app tests/
       env:
@@ -41,15 +62,15 @@ jobs:
         SECRET_KEY: test-key
         DATABASE_URL: "sqlite:///:memory:"
         REDIS_URL: redis://localhost:6379
-        
+
     - name: Upload coverage
       uses: codecov/codecov-action@v3
       with:
         fail_ci_if_error: true
 
   deploy:
-    needs: test
-    if: github.ref == 'refs/heads/main'
+    needs: check
+    if: github.ref == 'refs/heads/main' && success()
     runs-on: ubuntu-latest
     
     steps:
