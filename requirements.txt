@@ -6,7 +6,7 @@ Flask-WTF==1.2.1
 Flask-SocketIO==5.3.6
 Flask-Migrate==4.0.5
 Flask-Limiter==3.5.0
-Werkzeug==3.0.1
+Werkzeug<3.0.0
 
 # Database and caching
 SQLAlchemy==2.0.22
