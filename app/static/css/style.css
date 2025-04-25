@@ -19,3 +19,61 @@ body {
 .card-text {
     color: #6c757d;
 }
+
+/* Location and Category Styling */
+.location-section {
+    background-color: #ffffff;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.location-section h3 {
+    color: #2c3e50;
+    font-weight: 600;
+    margin-bottom: 15px;
+    padding: 8px 15px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    border-left: 4px solid #4a90e2;
+}
+
+.category-section {
+    margin-bottom: 20px;
+    padding: 0 10px;
+}
+
+.category-section h4 {
+    color: #34495e;
+    font-size: 1rem;
+    margin: 10px 0;
+    padding-bottom: 5px;
+    border-bottom: 2px solid #edf2f7;
+}
+
+.table thead th {
+    background-color: #f8f9fa;
+    border-bottom: 2px solid #e9ecef;
+    color: #2c3e50;
+    font-weight: 600;
+}
+
+.table-warning {
+    background-color: #fff3cd !important;
+}
+
+.btn-group .btn {
+    margin-right: 4px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .location-section {
+        padding: 10px;
+    }
+    
+    .table-responsive {
+        margin: 0 -10px;
+    }
+}

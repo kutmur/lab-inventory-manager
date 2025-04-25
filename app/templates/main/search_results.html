@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <h1 class="mb-4">Search Results</h1>
+    
+    <!-- Search Form -->
+    <div class="card mb-4">
+        <div class="card-body">
+            <form method="GET" action="{{ url_for('main.search_products') }}" class="row g-3">
+                <div class="col-md-6">
+                    <input type="text" name="q" class="form-control" value="{{ query }}" 
+                           placeholder="Search by product name or registry number...">
+                </div>
+                <div class="col-md-4">
+                    <select name="lab" class="form-select">
+                        <option value="all" {% if selected_lab_code == 'all' %}selected{% endif %}>All Labs</option>
+                        {% for lab in labs %}
+                        <option value="{{ lab.code }}" {% if selected_lab_code == lab.code %}selected{% endif %}>
+                            {{ lab.code }} - {{ lab.name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button type="submit" class="btn btn-primary w-100">Search</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Results Table -->
+    {% if products %}
+    <div class="card">
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Lab</th>
+                            <th>Name</th>
+                            <th>Registry #</th>
+                            <th>Quantity</th>
+                            <th>Unit</th>
+                            <th>Location</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for product in products %}
+                        <tr {% if product.quantity <= product.minimum_quantity %}class="table-warning"{% endif %}>
+                            <td>{{ product.lab.code }}</td>
+                            <td>{{ product.name }}</td>
+                            <td>{{ product.registry_number }}</td>
+                            <td>{{ product.quantity }}</td>
+                            <td>{{ product.unit }}</td>
+                            <td>{{ product.get_location_display() }}</td>
+                            <td>
+                                <div class="btn-group">
+                                    <a href="{{ url_for('main.edit_product', id=product.id) }}" 
+                                       class="btn btn-sm btn-outline-primary">Edit</a>
+                                    {% if current_user.role == 'admin' %}
+                                    <button type="button" class="btn btn-sm btn-outline-danger" 
+                                            data-bs-toggle="modal" data-bs-target="#deleteModal{{ product.id }}">
+                                        Delete
+                                    </button>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                        
+                        {% if current_user.role == 'admin' %}
+                        <!-- Delete Modal -->
+                        <div class="modal fade" id="deleteModal{{ product.id }}" tabindex="-1">
+                            <div class="modal-dialog">
+                                <div class="modal-content">
+                                    <div class="modal-header">
+                                        <h5 class="modal-title">Confirm Delete</h5>
+                                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                    </div>
+                                    <div class="modal-body">
+                                        Are you sure you want to delete "{{ product.name }}"?
+                                    </div>
+                                    <div class="modal-footer">
+                                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                        <form method="POST" action="{{ url_for('main.delete_product', id=product.id) }}" class="d-inline">
+                                            <button type="submit" class="btn btn-danger">Delete</button>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="alert alert-info">
+        {% if query %}
+        No products found matching your search criteria.
+        {% else %}
+        Enter a search term to find products.
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

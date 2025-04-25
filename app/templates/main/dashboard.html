@@ -1,88 +1,159 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="container">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h1>Lab Inventory Dashboard</h1>
-        <div>
-            <div class="btn-group me-2">
-                <a href="{{ url_for('main.export_pdf') }}" class="btn btn-outline-primary">
-                    <i class="bi bi-file-pdf"></i> PDF
+<div class="container mt-4">
+    <!-- Search and Action Buttons Row -->
+    <div class="row mb-4 align-items-center">
+        <div class="col-md-6">
+            <form action="{{ url_for('main.search_products') }}" method="GET" class="d-flex">
+                <input type="text" name="q" class="form-control me-2" placeholder="Search products...">
+                <input type="hidden" name="lab" value="{{ selected_lab_code }}">
+                <button type="submit" class="btn btn-outline-primary">Search</button>
+            </form>
+        </div>
+        <div class="col-md-6 text-end">
+            <div class="btn-group">
+                <a href="{{ url_for('main.add_product') }}" class="btn btn-success me-2">
+                    <i class="bi bi-plus-circle"></i> Add Product
                 </a>
-                <a href="{{ url_for('main.export_word') }}" class="btn btn-outline-primary">
-                    <i class="bi bi-file-word"></i> Word
-                </a>
-                <a href="{{ url_for('main.export_excel') }}" class="btn btn-outline-primary">
-                    <i class="bi bi-file-excel"></i> Excel
-                </a>
+                <div class="dropdown me-2">
+                    <button class="btn btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                        {% if selected_lab_code == 'all' %}
+                            All Labs
+                        {% else %}
+                            {{ selected_lab_code }}
+                        {% endif %}
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li>
+                            <a class="dropdown-item {% if selected_lab_code == 'all' %}active{% endif %}"
+                               href="{{ url_for('main.dashboard', lab='all') }}">
+                                All Labs
+                            </a>
+                        </li>
+                        {% for lab in all_labs %}
+                        <li>
+                            <a class="dropdown-item {% if selected_lab_code == lab.code %}active{% endif %}"
+                               href="{{ url_for('main.dashboard', lab=lab.code) }}">
+                                {{ lab.code }}
+                            </a>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="dropdown">
+                    <button class="btn btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                        Export
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item" href="{{ url_for('main.export_lab', lab_code=selected_lab_code, format='pdf') }}">PDF</a></li>
+                        <li><a class="dropdown-item" href="{{ url_for('main.export_lab', lab_code=selected_lab_code, format='xlsx') }}">Excel</a></li>
+                        <li><a class="dropdown-item" href="{{ url_for('main.export_lab', lab_code=selected_lab_code, format='docx') }}">Word</a></li>
+                        {% if selected_lab_code == 'all' %}
+                        <li><hr class="dropdown-divider"></li>
+                        <li><a class="dropdown-item" href="{{ url_for('main.export_all_labs', format='pdf') }}">All Labs PDF</a></li>
+                        <li><a class="dropdown-item" href="{{ url_for('main.export_all_labs', format='xlsx') }}">All Labs Excel</a></li>
+                        <li><a class="dropdown-item" href="{{ url_for('main.export_all_labs', format='docx') }}">All Labs Word</a></li>
+                        {% endif %}
+                    </ul>
+                </div>
             </div>
-            <a href="{{ url_for('main.add_product') }}" class="btn btn-primary">
-                <i class="bi bi-plus-circle"></i> Add Product
-            </a>
-            <a href="{{ url_for('main.transfer_product') }}" class="btn btn-secondary">
-                <i class="bi bi-arrow-left-right"></i> Transfer Product
-            </a>
         </div>
     </div>
 
+    <!-- Labs Content -->
     {% for lab in labs %}
     <div class="card mb-4">
-        <div class="card-header bg-light">
-            <h2 class="h5 mb-0">{{ lab.name }}</h2>
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h2 class="h5 mb-0">{{ lab.code }} - {{ lab.description }}</h2>
         </div>
         <div class="card-body">
-            <div class="table-responsive">
-                <table class="table table-hover">
-                    <thead class="table-light">
-                        <tr>
-                            <th>Registry #</th>
-                            <th>Name</th>
-                            <th>Quantity</th>
-                            <th>Unit</th>
-                            <th>Location</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for product in lab.products %}
-                        <tr class="{% if product.quantity <= product.minimum_quantity %}low-stock{% endif %}">
-                            <td>{{ product.registry_number }}</td>
-                            <td>{{ product.name }}</td>
-                            <td>{{ product.quantity }}</td>
-                            <td>{{ product.unit }}</td>
-                            <td>{{ product.location_in_lab }}</td>
-                            <td>
-                                {% if product.quantity <= product.minimum_quantity %}
-                                <span class="badge bg-warning text-dark">Low Stock</span>
-                                {% else %}
-                                <span class="badge bg-success">In Stock</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                <div class="btn-group">
-                                    <a href="{{ url_for('main.edit_product', id=product.id) }}" 
-                                       class="btn btn-sm btn-outline-primary">
-                                        <i class="bi bi-pencil"></i>
-                                    </a>
-                                    {% if current_user.role == 'admin' %}
-                                    <form action="{{ url_for('main.delete_product', id=product.id) }}" 
-                                          method="POST" class="d-inline">
-                                        <button type="submit" class="btn btn-sm btn-outline-danger" 
-                                                onclick="return confirm('Are you sure you want to delete this product?')">
-                                            <i class="bi bi-trash"></i>
-                                        </button>
-                                    </form>
-                                    {% endif %}
+            {% set sorted_products = lab_products[lab.id] %}
+            {% if sorted_products %}
+                {% for location_group in sorted_products %}
+                    <div class="location-section mb-4">
+                        <h3 class="h6 bg-light p-2 rounded">Location: {{ location_group.location_display }}</h3>
+                        {% for category, products in location_group.categories.items() %}
+                            <div class="category-section mb-3">
+                                <h4 class="h6 text-muted border-bottom pb-2">{{ category|title }}</h4>
+                                <div class="table-responsive">
+                                    <table class="table table-hover">
+                                        <thead>
+                                            <tr>
+                                                <th>Name</th>
+                                                <th>Registry #</th>
+                                                <th>Quantity</th>
+                                                <th>Unit</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for product in products %}
+                                            <tr {% if product.quantity <= product.minimum_quantity %}class="table-warning"{% endif %}>
+                                                <td>{{ product.name }}</td>
+                                                <td>{{ product.registry_number }}</td>
+                                                <td>{{ product.quantity }}</td>
+                                                <td>{{ product.unit }}</td>
+                                                <td>
+                                                    <div class="btn-group">
+                                                        <a href="{{ url_for('main.edit_product', id=product.id) }}" 
+                                                           class="btn btn-sm btn-outline-primary">Edit</a>
+                                                        {% if current_user.is_editor() %}
+                                                        <a href="{{ url_for('main.transfer_product', product_id=product.id) }}" 
+                                                           class="btn btn-sm btn-outline-info">Transfer</a>
+                                                        {% endif %}
+                                                        {% if current_user.role == 'admin' %}
+                                                        <button type="button" class="btn btn-sm btn-outline-danger" 
+                                                                data-bs-toggle="modal" data-bs-target="#deleteModal{{ product.id }}">
+                                                            Delete
+                                                        </button>
+                                                        {% endif %}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
                                 </div>
-                            </td>
-                        </tr>
+                            </div>
                         {% endfor %}
-                    </tbody>
-                </table>
-            </div>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <div class="alert alert-info">No products found in this lab.</div>
+            {% endif %}
         </div>
     </div>
+
+    {% if current_user.role == 'admin' %}
+    <!-- Delete Confirmation Modals -->
+    {% for location_group in lab_products[lab.id] %}
+        {% for category, products in location_group.categories.items() %}
+            {% for product in products %}
+            <div class="modal fade" id="deleteModal{{ product.id }}" tabindex="-1">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Confirm Delete</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            Are you sure you want to delete "{{ product.name }}"?
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <form method="POST" action="{{ url_for('main.delete_product', id=product.id) }}" class="d-inline">
+                                <button type="submit" class="btn btn-danger">Delete</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        {% endfor %}
+    {% endfor %}
+    {% endif %}
     {% endfor %}
 </div>
-{% endblock %} 
+{% endblock %}
+
