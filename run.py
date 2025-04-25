@@ -74,7 +74,7 @@ if __name__ == '__main__':
                 else:
                     print('Using existing database with users.')
 
-        socketio.run(app, debug=True)
+        socketio.run(app, debug=True, log_output=True)
     else:
         # Production mode - let gunicorn handle the serving
-        socketio.run(app, debug=app.config['DEBUG'])
+        socketio.run(app, debug=app.config['DEBUG'], log_output=True)
