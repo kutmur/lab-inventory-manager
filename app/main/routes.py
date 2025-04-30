@@ -271,6 +271,11 @@ def manage_users():
 @login_required
 def dashboard():
     """Render the main dashboard with lab inventory."""
+    # Safety net to ensure we always have labs
+    from app.models import Lab
+    if Lab.query.count() == 0:
+        Lab.get_predefined_labs()
+        
     labs = Lab.query.order_by(Lab.code).all()
     selected_lab_code = request.args.get('lab', 'all')
     
@@ -313,6 +318,8 @@ def add_product():
         return redirect(url_for('main.dashboard'))
     
     form = ProductForm()
+    form.lab_id.data = selected_lab.id  # Pre-select the lab
+    
     if form.validate_on_submit():
         loc_parts = form.location.data.split('-')
         
@@ -329,9 +336,9 @@ def add_product():
             product = Product(
                 name=form.name.data,
                 registry_number=form.registry_number.data,
-                quantity=float(form.quantity.data),
+                quantity=int(form.quantity.data),  # Ensure integer
                 unit=form.unit.data,
-                minimum_quantity=float(form.minimum_quantity.data),
+                minimum_quantity=int(form.minimum_quantity.data),  # Ensure integer
                 location_type=location_type,
                 location_number=location_number,
                 location_position=location_position,
@@ -398,7 +405,8 @@ def add_product():
         'main/product_form.html',
         title='Add Product',
         form=form,
-        selected_lab=selected_lab
+        selected_lab=selected_lab,
+        labs=[selected_lab]  # Pass labs for location dropdown JS
     )
 
 
@@ -414,6 +422,10 @@ def edit_product(id):
         return redirect(url_for('main.dashboard'))
     
     form = ProductForm(obj=product)
+    
+    # Pre-populate the lab_id field
+    form.lab_id.data = product.lab_id
+    
     if form.validate_on_submit():
         try:
             old_quantity = product.quantity
@@ -422,9 +434,9 @@ def edit_product(id):
             update_data = {
                 'name': form.name.data,
                 'registry_number': form.registry_number.data,
-                'quantity': float(form.quantity.data),
+                'quantity': int(form.quantity.data),
                 'unit': form.unit.data,
-                'minimum_quantity': float(form.minimum_quantity.data),
+                'minimum_quantity': int(form.minimum_quantity.data),
                 'notes': form.notes.data,
                 'version_id': product.version_id
             }
@@ -524,7 +536,8 @@ def edit_product(id):
         'main/product_form.html',
         title='Edit Product',
         form=form,
-        selected_lab=product.lab
+        selected_lab=product.lab,
+        labs=[product.lab]  # Pass labs for location dropdown JS
     )
 
 
@@ -1059,33 +1072,34 @@ def search_products():
                          selected_lab_code=lab_code)
 
 
-@bp.route('/lab/add', methods=['GET', 'POST'])
-@login_required
-@admin_required
-def add_lab():
-    """Add a new laboratory."""
-    form = LabForm()
-    if form.validate_on_submit():
-        try:
-            lab = Lab(
-                name=form.name.data,
-                description=form.description.data,
-                location=form.location.data
-            )
-            db.session.add(lab)
-            db.session.commit()
-            flash('Laboratory added successfully', 'success')
-            return redirect(url_for('main.dashboard'))
-        except IntegrityError:
-            db.session.rollback()
-            flash('A lab with this name already exists', 'error')
-        except Exception as e:
-            db.session.rollback()
-            current_app.logger.error(f"Error adding lab: {str(e)}")
-            flash('An error occurred while adding the lab', 'error')
-    
-    return render_template(
-        'main/lab_form.html',
-        title='Add Laboratory',
-        form=form
-    )
+# Commented out as per requirements to disable lab creation
+# @bp.route('/lab/add', methods=['GET', 'POST'])
+# @login_required
+# @admin_required
+# def add_lab():
+#     """Add a new laboratory."""
+#     form = LabForm()
+#     if form.validate_on_submit():
+#         try:
+#             lab = Lab(
+#                 name=form.name.data,
+#                 description=form.description.data,
+#                 location=form.location.data
+#             )
+#             db.session.add(lab)
+#             db.session.commit()
+#             flash('Laboratory added successfully', 'success')
+#             return redirect(url_for('main.dashboard'))
+#         except IntegrityError:
+#             db.session.rollback()
+#             flash('A lab with this name already exists', 'error')
+#         except Exception as e:
+#             db.session.rollback()
+#             current_app.logger.error(f"Error adding lab: {str(e)}")
+#             flash('An error occurred while adding the lab', 'error')
+#     
+#     return render_template(
+#         'main/lab_form.html',
+#         title='Add Laboratory',
+#         form=form
+#     )

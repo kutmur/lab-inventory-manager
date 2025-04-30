@@ -98,6 +98,10 @@ def create_app(config_class=Config):
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp, url_prefix='/auth')
 
+    # Safety guard for removed add_lab route
+    if 'main.add_lab' not in app.view_functions:
+        app.jinja_env.globals.pop('add_lab', None)
+
     @app.context_processor
     def inject_models():
         """Make models available in templates."""
@@ -115,6 +119,11 @@ def create_app(config_class=Config):
         else:
             # Just create tables in development
             db.create_all()
+            
+        # --- auto-seed predefined labs ---
+        from app.models import Lab
+        if Lab.query.count() == 0:        # seed only once
+            Lab.get_predefined_labs()
             
         # Ensure admin user exists
         if not User.query.filter_by(

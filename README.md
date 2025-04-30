@@ -1,16 +1,30 @@
 # Lab Inventory Manager
 
-A Flask-based inventory management system for laboratories.
+A Flask-based inventory management system designed for laboratories.
 
 ## Features
 
-- Multi-laboratory inventory tracking
-- Product transfers between labs
+- Multi-laboratory inventory tracking with predefined laboratory locations
+- Product transfers between labs with complete audit logging
 - Real-time notifications via WebSocket
 - Export reports in Excel, PDF, and Word formats
 - Role-based access control (Admin/Editor)
 - Stock level monitoring and alerts
-- Activity logging
+- Comprehensive activity logging
+
+## Laboratories
+
+The system includes the following predefined laboratories:
+
+| Code | Name | Description |
+|------|------|-------------|
+| EEMLAB01-361 | Elektrik Makineler | Elektrik Makineler Laboratuvarı |
+| EEMLAB02-363 | Güç Elektroniği | Güç Elektroniği Laboratuvarı |
+| EEMLAB03-365 | Otomatik Kontrol | Otomatik Kontrol Laboratuvarı |
+| EEMLAB04-367 | Yapay Zeka ve İleri Sinyal | Yapay Zeka ve İleri Sinyal Laboratuvarı |
+| EEMLAB05-369 | Mikroişlemci | Mikroişlemci Laboratuvarı |
+| EEMLAB06-371 | Haberleşme ve Mikrodalga | Haberleşme ve Mikrodalga Laboratuvarı |
+| EEMLAB07-373 | Temel Elektrik-Elektronik | Temel Elektrik-Elektronik Laboratuvarı |
 
 ## Setup
 
@@ -63,7 +77,12 @@ export EDITOR_EMAIL=editor@example.com
 flask init-db
 ```
 
-6. Run the development server:
+6. Seed the predefined laboratories:
+```bash
+flask seed-labs
+```
+
+7. Run the development server:
 ```bash
 flask run
 ```
@@ -115,6 +134,9 @@ pip install pytest pytest-cov flake8 mypy
 ```bash
 # Run all tests
 pytest
+
+# Run smoke tests only
+pytest tests/test_smoke.py
 
 # Run with coverage report
 pytest --cov=app tests/
