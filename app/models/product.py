@@ -30,15 +30,11 @@ class Product(db.Model):
         default=datetime.utcnow,
         onupdate=datetime.utcnow
     )
+    version_id = db.Column(db.Integer, nullable=False, default=1)
     
-    # Replace manual version_id with SQLAlchemy's version_id_col
+    # Update mapper args to reference the version_id column
     __mapper_args__ = {
-        'version_id_col': db.Column(
-            'version_id',
-            db.Integer,
-            nullable=False,
-            default=0
-        )
+        "version_id_col": version_id
     }
 
     lab_id = db.Column(db.Integer, db.ForeignKey('lab.id'), nullable=False)

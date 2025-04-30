@@ -46,6 +46,25 @@ jobs:
         pip install -r requirements-dev.txt
         pip install pip-audit
 
+    - name: Initialize database and run migrations
+      run: |
+        FLASK_APP=manage.py python - <<'PY'
+        from app import create_app, db
+        app = create_app()
+        with app.app_context():
+            db.create_all()
+        PY
+        python migrations/pre_deploy.py
+      env:
+        FLASK_ENV: testing
+        SECRET_KEY: dummy
+        SQLALCHEMY_DATABASE_URI: "sqlite:///test.db"
+        DATABASE_URL: "sqlite:///test.db"
+        ADMIN_USERNAME: admin
+        ADMIN_EMAIL: admin@example.com
+        ADMIN_PASSWORD: password123
+        REDIS_URL: redis://localhost:6379
+
     - name: Run linting
       run: flake8 .
 
@@ -59,8 +78,12 @@ jobs:
       run: pytest --cov=app tests/
       env:
         FLASK_ENV: testing
-        SECRET_KEY: test-key
-        DATABASE_URL: "sqlite:///:memory:"
+        SECRET_KEY: dummy
+        SQLALCHEMY_DATABASE_URI: "sqlite:///test.db"
+        DATABASE_URL: "sqlite:///test.db"
+        ADMIN_USERNAME: admin
+        ADMIN_EMAIL: admin@example.com
+        ADMIN_PASSWORD: password123
         REDIS_URL: redis://localhost:6379
 
     - name: Upload coverage
@@ -72,11 +95,13 @@ jobs:
     needs: check
     if: github.ref == 'refs/heads/main' && success()
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Deploy to Render
       env:
-        RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        # Tercih ediyorsan URL’yi bir GitHub secret’ına taşı (örn. RENDER_DEPLOY_HOOK_URL)
+        # ve aşağıdaki satırı `RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}` olarak değiştir.
+        RENDER_DEPLOY_HOOK_URL: "https://api.render.com/deploy/srv-d033ctruibrs73bcr7h0?key=XsAB4XtHwMs"
       run: |
         if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
           echo "Error: RENDER_DEPLOY_HOOK_URL is not set"

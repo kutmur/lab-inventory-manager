@@ -105,18 +105,46 @@ class TransferForm(FlaskForm):
     notes = TextAreaField('Notes')
     submit = SubmitField('Confirm Transfer')
 
-    def __init__(self, *args, source_lab_id=None, max_quantity=None, **kwargs):
+    def __init__(self, *args, source_lab_id=None, max_quantity=None, product=None, **kwargs):
         super().__init__(*args, **kwargs)
-        if source_lab_id:
+
+        # ---------- SOURCE LAB (yeni) ----------
+        if source_lab_id is not None:
+            src_lab = Lab.query.get(source_lab_id)
+            label = f"{src_lab.code} - {src_lab.name}" if src_lab else "Current Lab"
+            self.source_lab_id.choices = [(source_lab_id, label)]
             self.source_lab_id.data = source_lab_id
-            # Exclude source lab from destination choices
-            self.destination_lab_id.choices = [
-                (lab.id, f"{lab.code} - {lab.name}")
-                for lab in Lab.query.filter(Lab.id != source_lab_id).all()
-            ]
+        else:
+            # koruma kalkanı
+            self.source_lab_id.choices = [(-1, "--- unknown lab ---")]
+
+        # ----------- PRODUCT CHOICE --------------
+        # tek seçenek: transfer edilen ürünün kendisi
+        if product is not None:
+            self.product_id.choices = [(product.id, product.name)]
+            self.product_id.data = product.id
+        else:
+            # güvenlik kalkanı: choices boş kalmasın
+            self.product_id.choices = [(-1, "--- unknown product ---")]
+
+        # ----------- SOURCE / DEST LAB -----------
+        q = Lab.query
+        if source_lab_id is not None:
+            q = q.filter(Lab.id != source_lab_id)
+
+        dest_choices = [(l.id, f"{l.code} - {l.name}") for l in q.all()] \
+                       or [(-1, "--- no other labs ---")]
+        self.destination_lab_id.choices = dest_choices
+
+        # ----------- MAX QUANTITY ---------------
         if max_quantity:
+            self.quantity.validators = [
+                v for v in self.quantity.validators
+                if not (isinstance(v, NumberRange) and v.max is not None)
+            ]
             self.quantity.validators.append(
-                NumberRange(max=max_quantity, message=f"Cannot transfer more than available quantity ({max_quantity})")
+                NumberRange(max=max_quantity,
+                            message=f"Cannot transfer more than {max_quantity}")
             )
 
 

@@ -13,9 +13,10 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError, InvalidRequestError
 import pytz
 from sqlalchemy.orm import joinedload
+from sqlalchemy.orm.exc import StaleDataError as ConcurrencyError
 
 from app.main import bp
 from app.main.forms import ProductForm, TransferForm, LabForm
@@ -24,7 +25,6 @@ from app.models import Product, Lab, TransferLog, UserLog
 from app.extensions import db, limiter
 from app.utils import create_user_log
 from app.socket_events import notify_inventory_update, notify_stock_alert
-from app.models.product import ConcurrencyError
 
 
 def format_timestamp(timestamp):
@@ -431,30 +431,22 @@ def edit_product(id):
             old_quantity = product.quantity
             loc_parts = form.location.data.split('-')
             
-            update_data = {
-                'name': form.name.data,
-                'registry_number': form.registry_number.data,
-                'quantity': int(form.quantity.data),
-                'unit': form.unit.data,
-                'minimum_quantity': int(form.minimum_quantity.data),
-                'notes': form.notes.data,
-                'version_id': product.version_id
-            }
+            # Direct attribute assignment instead of using update_record()
+            product.name = form.name.data
+            product.registry_number = form.registry_number.data
+            product.quantity = int(form.quantity.data)  # Ensure integer
+            product.unit = form.unit.data
+            product.minimum_quantity = int(form.minimum_quantity.data)  # Ensure integer
+            product.notes = form.notes.data
             
             if loc_parts[0] == 'workspace':
-                update_data.update({
-                    'location_type': 'workspace',
-                    'location_number': None,
-                    'location_position': None
-                })
+                product.location_type = 'workspace'
+                product.location_number = None
+                product.location_position = None
             else:
-                update_data.update({
-                    'location_type': 'cabinet',
-                    'location_number': loc_parts[1],
-                    'location_position': loc_parts[2]
-                })
-            
-            product.update_record(update_data)
+                product.location_type = 'cabinet'
+                product.location_number = loc_parts[1]
+                product.location_position = loc_parts[2]
             
             # Create user log for quantity change
             if product.quantity != old_quantity:
@@ -497,27 +489,21 @@ def edit_product(id):
             ))
             
         except ValueError as ve:
-            current_app.logger.error(
+            db.session.rollback()
+            current_app.logger.exception(
                 f"Validation error while updating product: {str(ve)}"
             )
             flash(f'Validation error: {str(ve)}', 'error')
         except IntegrityError:
             db.session.rollback()
-            flash(
-                'A product with this registry number already exists '
-                'in this lab',
-                'error'
-            )
-        except ConcurrencyError:
+            flash('Duplicate registry number in this lab.', 'error')
+        except SQLAlchemyError as e:
             db.session.rollback()
-            flash(
-                'This product was modified by another user. '
-                'Please refresh and try again.',
-                'error'
-            )
+            current_app.logger.exception(e)
+            flash('DB error while updating product.', 'error')
         except Exception as e:
             db.session.rollback()
-            current_app.logger.error(
+            current_app.logger.exception(
                 f"Error while updating product: {str(e)}"
             )
             flash('An error occurred while updating the product', 'error')
@@ -551,30 +537,18 @@ def delete_product(id):
     lab_code = product.lab.code
     
     try:
-        # Create user log before deletion
-        create_user_log(
-            user=current_user,
-            action_type='delete',
-            product=product,
-            lab=product.lab,
-            quantity=-product.quantity,
-            notes=f"Product deleted with {product.quantity} {product.unit}"
-        )
-        
-        # Send notification before deletion
-        notify_inventory_update(product.id, 'delete', {
-            'name': product.name,
-            'lab': lab_code
-        })
-        
         db.session.delete(product)
         db.session.commit()
-        
+        create_user_log(current_user, 'delete', product, product.lab,
+                      -product.quantity, 'Product deleted')
         flash('Product deleted successfully', 'success')
-    except Exception as e:
+    except IntegrityError:
         db.session.rollback()
-        current_app.logger.error(f"Error deleting product: {str(e)}")
-        flash('An error occurred while deleting the product', 'error')
+        flash('Cannot delete: product is referenced elsewhere.', 'error')
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        current_app.logger.exception(e)
+        flash('DB error while deleting product.', 'error')
     
     return redirect(url_for('main.dashboard', lab=lab_code))
 
@@ -595,26 +569,20 @@ def transfer_product(product_id):
         flash('No available destination laboratories for transfer.', 'danger')
         return redirect(url_for('main.dashboard'))
     
-    form = TransferForm(source_lab_id=source_product.lab_id, max_quantity=source_product.quantity)
-    form.destination_lab_id.choices = [(lab.id, f"{lab.code} - {lab.description}") for lab in destination_labs]
+    form = TransferForm(request.form, 
+                       source_lab_id=source_product.lab_id, 
+                       max_quantity=source_product.quantity,
+                       product=source_product)
 
     if form.validate_on_submit():
         target_lab_id = form.destination_lab_id.data
-        transfer_quantity = form.quantity.data
+        transfer_quantity = int(form.quantity.data)  # Ensure integer
         notes = form.notes.data
 
         try:
-            destination_lab = Lab.query.get(target_lab_id)
-            if not destination_lab:
-                flash('Selected destination laboratory does not exist.', 'danger')
-                return render_template('main/transfer_form.html', title='Transfer Product', form=form, product=source_product)
+            destination_lab = Lab.query.get_or_404(target_lab_id)
 
-            clean_registry = source_product.registry_number.strip()
-            target_product_exists = Product.query.filter_by(
-                lab_id=target_lab_id,
-                registry_number=clean_registry
-            ).first()
-
+            # Basic validation checks
             if transfer_quantity > source_product.quantity:
                 flash('Transfer quantity cannot exceed available quantity!', 'danger')
                 return render_template('main/transfer_form.html', title='Transfer Product', form=form, product=source_product)
@@ -623,69 +591,76 @@ def transfer_product(product_id):
                 flash('Transfer quantity must be positive!', 'danger')
                 return render_template('main/transfer_form.html', title='Transfer Product', form=form, product=source_product)
 
-            with db.session.begin_nested():
-                if target_product_exists:
-                    target_product_exists.quantity += transfer_quantity
-                else:
-                    target_product_exists = Product(
-                        name=source_product.name,
-                        registry_number=clean_registry,
-                        quantity=transfer_quantity,
-                        unit=source_product.unit,
-                        minimum_quantity=source_product.minimum_quantity,
-                        location_type='workspace',
-                        location_number=None,
-                        location_position=None,
-                        notes=notes or source_product.notes,
-                        lab_id=target_lab_id
-                    )
-                    db.session.add(target_product_exists)
+            clean_registry = source_product.registry_number.strip()
 
-                source_product.quantity -= transfer_quantity
+            # ➡️ 1) Kaynak miktarı küçült
+            if source_product.quantity < transfer_quantity:
+                raise ValueError("Transfer quantity exceeds available stock")
+            source_product.quantity -= transfer_quantity
 
-                transfer_log = TransferLog(
-                    product_id=source_product.id,
-                    source_lab_id=source_product.lab_id,
-                    destination_lab_id=target_lab_id,
+            # ➡️ 2) Hedef ürünü bul / oluştur
+            target_product = Product.query.filter_by(
+                lab_id=target_lab_id,
+                registry_number=clean_registry
+            ).first()
+            if target_product:
+                target_product.quantity += transfer_quantity
+            else:
+                target_product = Product(
+                    name=source_product.name,
+                    registry_number=clean_registry,
                     quantity=transfer_quantity,
-                    notes=f"Transferred from {source_product.lab.code} to {destination_lab.code}",
-                    created_by_id=current_user.id
+                    unit=source_product.unit,
+                    minimum_quantity=source_product.minimum_quantity,
+                    location_type='workspace',
+                    notes=notes or source_product.notes,
+                    lab_id=target_lab_id
                 )
-                db.session.add(transfer_log)
+                db.session.add(target_product)
 
-                create_user_log(
-                    user=current_user,
-                    action_type='transfer',
-                    product=source_product,
-                    lab=source_product.lab,
-                    quantity=-transfer_quantity,
-                    notes=f"Transferred {transfer_quantity} {source_product.unit} to {destination_lab.code}"
-                )
-                create_user_log(
-                    user=current_user,
-                    action_type='transfer',
-                    product=target_product_exists,
-                    lab=destination_lab,
-                    quantity=transfer_quantity,
-                    notes=f"Received {transfer_quantity} {source_product.unit} from {source_product.lab.code}"
-                )
+            # ➡️ 3) TransferLog + UserLog
+            transfer_log = TransferLog(
+                product_id           = source_product.id,
+                source_lab_id        = source_product.lab_id,
+                destination_lab_id   = target_lab_id,
+                quantity             = transfer_quantity,
+                notes                = f"{source_product.lab.code} ➜ {destination_lab.code}",
+                created_by_id        = current_user.id
+            )
+            db.session.add(transfer_log)
 
-                db.session.commit()
+            create_user_log(current_user, 'transfer', source_product,
+                            source_product.lab, -transfer_quantity,
+                            f"Sent to {destination_lab.code}")
+            create_user_log(current_user, 'transfer', target_product,
+                            destination_lab, transfer_quantity,
+                            f"Received from {source_product.lab.code}")
+
+            # 🔑 Tek seferde kaydet
+            db.session.commit()
 
             notify_inventory_update(source_product.id, 'transfer', {
-                'name': source_product.name,
-                'quantity': source_product.quantity,
-                'source_lab': source_product.lab_id,
+                'name'           : source_product.name,
+                'quantity'       : source_product.quantity,
+                'source_lab'     : source_product.lab_id,
                 'destination_lab': target_lab_id
             })
-
             flash('Product transferred successfully!', 'success')
-            return redirect(url_for('main.dashboard'))
+            return redirect(url_for('main.dashboard', lab=source_product.lab.code))
+
+        except (InvalidRequestError, SQLAlchemyError) as db_err:
+            db.session.rollback()
+            current_app.logger.exception(f"DB error during transfer: {db_err}")
+            flash('Database error during transfer. Please try again.', 'danger')
+
+        except ValueError as ve:
+            db.session.rollback()
+            flash(str(ve), 'warning')
 
         except Exception as e:
             db.session.rollback()
-            flash(f'Error during transfer: {str(e)}', 'danger')
-            return render_template('main/transfer_form.html', title='Transfer Product', form=form, product=source_product)
+            current_app.logger.exception(f"Unexpected error: {e}")
+            flash('Unexpected error during transfer.', 'danger')
 
     return render_template('main/transfer_form.html', title='Transfer Product', form=form, product=source_product)
 
