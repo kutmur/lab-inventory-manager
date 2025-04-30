@@ -1,203 +1,685 @@
 # app/main/routes.py
 
-from flask import render_template, redirect, url_for, flash, request, send_file, current_app
-from flask_login import login_required, current_user
-from app.main import bp
-from app.main.forms import ProductForm, TransferForm, LabForm
-from app.models import Product, Lab, TransferLog, UserLog
-from app.extensions import db
-from app.auth.decorators import admin_required
 import io
 from datetime import datetime
+from flask import (
+    render_template, redirect, url_for, flash, request, 
+    send_file, current_app, stream_with_context, Response
+)
+from flask_login import login_required, current_user
+from docx import Document
+import pandas as pd
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
-from reportlab.lib.styles import getSampleStyleSheet
-from docx import Document
-from docx.shared import Inches
-import pandas as pd
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError, InvalidRequestError
+import pytz
+from sqlalchemy.orm import joinedload
+from sqlalchemy.orm.exc import StaleDataError as ConcurrencyError
+
+from app.main import bp
+from app.main.forms import ProductForm, TransferForm, LabForm
+from app.auth.decorators import admin_required
+from app.models import Product, Lab, TransferLog, UserLog
+from app.extensions import db, limiter
 from app.utils import create_user_log
-from app.socket_events import notify_inventory_update
-from app.models.product import ConcurrencyError
+from app.socket_events import notify_inventory_update, notify_stock_alert
+
+
+def format_timestamp(timestamp):
+    """Convert UTC timestamp to Europe/Istanbul timezone.
+    
+    Args:
+        timestamp: UTC datetime object
+    
+    Returns:
+        datetime: Localized datetime in Europe/Istanbul timezone
+    """
+    istanbul_tz = pytz.timezone('Europe/Istanbul')
+    return pytz.utc.localize(timestamp).astimezone(istanbul_tz)
+
+
+def generate_excel(data):
+    """Generate Excel file as a stream.
+    
+    Args:
+        data: List of dictionaries containing product data
+    
+    Returns:
+        BytesIO: Excel file stream
+    """
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df = pd.DataFrame(data)
+        df.to_excel(writer, sheet_name='Lab Inventory', index=False)
+        workbook = writer.book
+        worksheet = writer.sheets['Lab Inventory']
+        
+        header_format = workbook.add_format({
+            'bold': True,
+            'bg_color': '#4F81BD',
+            'font_color': 'white',
+            'border': 1
+        })
+        
+        for col_num, value in enumerate(df.columns.values):
+            worksheet.write(0, col_num, value, header_format)
+            max_len = max(
+                df[value].astype(str).apply(len).max(),
+                len(value)
+            )
+            worksheet.set_column(col_num, col_num, max_len + 2)
+    
+    output.seek(0)
+    return output
+
+
+def generate_pdf(data, lab_code=None):
+    """Generate PDF file as a stream.
+    
+    Args:
+        data: List of dictionaries containing product data
+        lab_code: Optional lab code for title
+    
+    Returns:
+        BytesIO: PDF file stream
+    """
+    buffer = io.BytesIO()
+    
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=72,
+        leftMargin=72,
+        topMargin=72,
+        bottomMargin=72
+    )
+    
+    elements = []
+    styles = getSampleStyleSheet()
+    title_text = (
+        f"Lab Inventory Report - {lab_code}"
+        if lab_code
+        else "Full Inventory Report"
+    )
+    
+    timestamp = format_timestamp(datetime.utcnow())
+    elements.append(Paragraph(title_text, styles['Title']))
+    elements.append(Paragraph(
+        f"Generated on: {timestamp.strftime('%Y-%m-%d %H:%M')}",
+        styles['Normal']
+    ))
+    
+    # Create table data
+    headers = [
+        'Name', 'Registry #', 'Quantity', 'Unit',
+        'Min Qty', 'Location', 'Notes'
+    ]
+    if not lab_code:
+        headers.insert(0, 'Lab')
+    
+    table_data = [headers]
+    for row in data:
+        table_row = [
+            row['Name'],
+            row['Registry Number'],
+            str(row['Quantity']),
+            row['Unit'],
+            str(row['Minimum Quantity']),
+            row['Location'],
+            row['Notes']
+        ]
+        if not lab_code:
+            table_row.insert(0, row.get('Lab', ''))
+        table_data.append(table_row)
+    
+    table = Table(table_data)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+    ]))
+    elements.append(table)
+    
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+
+def generate_word(data, lab_code=None):
+    """Generate Word document as a stream.
+    
+    Args:
+        data: List of dictionaries containing product data
+        lab_code: Optional lab code for title
+    
+    Returns:
+        BytesIO: Word document stream
+    """
+    doc = Document()
+    title_text = (
+        f"Lab Inventory Report - {lab_code}"
+        if lab_code
+        else "Full Inventory Report"
+    )
+    doc.add_heading(title_text, 0)
+    
+    timestamp = format_timestamp(datetime.utcnow())
+    doc.add_paragraph(
+        f"Generated on: {timestamp.strftime('%Y-%m-%d %H:%M')}"
+    )
+    
+    headers = [
+        'Name', 'Registry #', 'Quantity', 'Unit',
+        'Min Qty', 'Location', 'Notes'
+    ]
+    if not lab_code:
+        headers.insert(0, 'Lab')
+    
+    table = doc.add_table(rows=1, cols=len(headers))
+    table.style = 'Table Grid'
+    header_cells = table.rows[0].cells
+    for i, header in enumerate(headers):
+        header_cells[i].text = header
+    
+    for row in data:
+        row_cells = table.add_row().cells
+        col = 0
+        if not lab_code:
+            row_cells[col].text = row.get('Lab', '')
+            col += 1
+        row_cells[col].text = row['Name']
+        row_cells[col + 1].text = row['Registry Number']
+        row_cells[col + 2].text = str(row['Quantity'])
+        row_cells[col + 3].text = row['Unit']
+        row_cells[col + 4].text = str(row['Minimum Quantity'])
+        row_cells[col + 5].text = row['Location']
+        row_cells[col + 6].text = row['Notes']
+    
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
 
 
 @bp.route('/')
 @bp.route('/index')
 def index():
-    """
-    Anasayfa. main/index.html render edilir.
-    """
+    """Render the home page."""
     return render_template('main/index.html', title='Home')
+
 
 @bp.route('/admin/dashboard')
 @login_required
 @admin_required
 def admin_dashboard():
-    """
-    Admin kontrol paneli örneği.
-    """
+    """Render the admin dashboard."""
     return render_template('admin/dashboard.html')
+
 
 @bp.route('/user/profile')
 @login_required
 def user_profile():
+    """Render the user profile page."""
     return render_template('user/profile.html')
+
 
 @bp.route('/protected-route')
 @login_required
 def protected_route():
+    """Render a protected route for logged-in users."""
     return render_template('protected.html')
+
 
 @bp.route('/admin-only')
 @login_required
 @admin_required
 def admin_only():
+    """Render a page accessible only to admin users."""
     return render_template('admin.html')
+
 
 @bp.route('/products')
 @login_required
 def products():
-    """
-    Örnek: Tüm kullanıcıların görebileceği bir ürün listesi (şimdilik placeholder).
-    """
+    """Render a product list accessible to all users."""
     return render_template('products.html')
+
 
 @bp.route('/admin/manage-users')
 @login_required
 @admin_required
 def manage_users():
-    """
-    Sadece adminlerin görebileceği bir manage users sayfası. (placeholder)
-    """
+    """Render the user management page for admin users."""
     return render_template('admin/manage_users.html')
+
 
 @bp.route('/dashboard')
 @login_required
 def dashboard():
-    """
-    Laboratuvarları listeler. Query param 'lab' = 'all' ya da lab.code olabilir.
-    """
-    # Tüm predefined labs’i getir
-    all_labs = Lab.get_predefined_labs()
+    """Render the main dashboard with lab inventory."""
+    # Safety net to ensure we always have labs
+    from app.models import Lab
+    if Lab.query.count() == 0:
+        Lab.get_predefined_labs()
+        
+    labs = Lab.query.order_by(Lab.code).all()
     selected_lab_code = request.args.get('lab', 'all')
-
-    if selected_lab_code == 'all':
-        labs_to_show = all_labs
-    else:
-        selected_lab = next((lab for lab in all_labs if lab.code == selected_lab_code), None)
-        if not selected_lab:
-            selected_lab_code = 'all'
-            labs_to_show = all_labs
-        else:
-            labs_to_show = [selected_lab]
     
+    if selected_lab_code != 'all':
+        selected_lab = Lab.query.filter_by(code=selected_lab_code).first()
+        if selected_lab:
+            products_by_location = Product.get_sorted_products(
+                selected_lab.id
+            )
+        else:
+            flash('Invalid lab code selected', 'error')
+            return redirect(url_for('main.dashboard'))
+    else:
+        products_by_location = []
+        selected_lab = None
+
     return render_template(
-        'main/dashboard.html', 
-        title='Dashboard', 
-        labs=labs_to_show,
-        all_labs=all_labs,
-        selected_lab_code=selected_lab_code
+        'main/dashboard.html',
+        title='Dashboard',
+        labs=labs,
+        selected_lab=selected_lab,
+        selected_lab_code=selected_lab_code,
+        products_by_location=products_by_location
     )
+
 
 @bp.route('/product/add', methods=['GET', 'POST'])
 @login_required
+@limiter.limit("20 per hour")
 def add_product():
-    """
-    Yeni bir ürün eklemek için form.
-    Location bilgisi (workspace ya da cabinet-x-upper/lower) parse ediliyor.
-    """
+    """Add a new product to inventory."""
+    selected_lab_code = request.args.get('lab')
+    if not selected_lab_code:
+        flash('Please select a lab first', 'warning')
+        return redirect(url_for('main.dashboard'))
+    
+    selected_lab = Lab.query.filter_by(code=selected_lab_code).first()
+    if not selected_lab:
+        flash('Invalid lab selected', 'error')
+        return redirect(url_for('main.dashboard'))
+    
     form = ProductForm()
+    form.lab_id.data = selected_lab.id  # Pre-select the lab
+    
     if form.validate_on_submit():
+        loc_parts = form.location.data.split('-')
+        
+        if loc_parts[0] == 'workspace':
+            location_type = 'workspace'
+            location_number = None
+            location_position = None
+        else:
+            location_type = 'cabinet'
+            location_number = loc_parts[1]
+            location_position = loc_parts[2]
+
         try:
-            selected_lab = Lab.query.get(form.lab_id.data)
-            if not selected_lab:
-                flash('Please select a valid laboratory.', 'error')
-                return render_template('main/product_form.html', form=form, title='Add Product')
-
-            # Registry number uniqueness check
-            if Product.query.filter_by(registry_number=form.registry_number.data).first():
-                flash('A product with this registry number already exists.', 'error')
-                return render_template('main/product_form.html', form=form, title='Add Product')
-
-            # Konum parse
-            loc_parts = form.location_number.data.split('-')
-            if loc_parts[0] == 'workspace':
-                location_type = 'workspace'
-                location_number = None
-                location_position = None
-            else:
-                # "cabinet-<num>-upper/lower" format
-                location_type = 'cabinet'
-                location_number = loc_parts[1]
-                location_position = loc_parts[2]
-
             product = Product(
                 name=form.name.data,
                 registry_number=form.registry_number.data,
-                quantity=form.quantity.data,
+                quantity=int(form.quantity.data),  # Ensure integer
                 unit=form.unit.data,
-                minimum_quantity=form.minimum_quantity.data,
+                minimum_quantity=int(form.minimum_quantity.data),  # Ensure integer
                 location_type=location_type,
                 location_number=location_number,
                 location_position=location_position,
                 notes=form.notes.data,
                 lab_id=selected_lab.id
             )
-            
             db.session.add(product)
-            db.session.flush()
-
-            # Log kaydı
+            
+            # Create user log entry
             create_user_log(
                 user=current_user,
                 action_type='add',
                 product=product,
                 lab=selected_lab,
                 quantity=product.quantity,
-                notes=f"Added new product: {product.name}"
+                notes=f"Initial addition: {product.quantity} {product.unit}"
             )
+            
             db.session.commit()
-
-            # Socket.io notification
+            
+            # Send notifications
             notify_inventory_update(product.id, 'add', {
                 'name': product.name,
-                'registry_number': product.registry_number,
                 'quantity': product.quantity,
-                'lab_id': product.lab_id,
-                'location_type': product.location_type,
-                'location_number': product.location_number,
-                'location_position': product.location_position
+                'unit': product.unit,
+                'location': product.get_location_display()
             })
-
-            flash(f'Product "{product.name}" added successfully to {selected_lab.name}!', 'success')
-            return redirect(url_for('main.dashboard'))
+            
+            if product.quantity <= product.minimum_quantity:
+                notify_stock_alert(product.id, {
+                    'name': product.name,
+                    'quantity': product.quantity,
+                    'minimum': product.minimum_quantity,
+                    'unit': product.unit,
+                    'lab': selected_lab.code
+                })
+            
+            flash('Product added successfully', 'success')
+            return redirect(url_for(
+                'main.dashboard',
+                lab=selected_lab_code
+            ))
+            
         except ValueError as ve:
-            db.session.rollback()
+            current_app.logger.error(
+                f"Validation error while creating product: {str(ve)}"
+            )
             flash(f'Validation error: {str(ve)}', 'error')
+        except IntegrityError:
+            db.session.rollback()
+            flash(
+                'A product with this registry number already exists '
+                'in this lab',
+                'error'
+            )
         except Exception as e:
             db.session.rollback()
-            current_app.logger.error(f"Error adding product: {str(e)}")
-            flash('An error occurred while adding the product. Please try again.', 'error')
+            current_app.logger.error(
+                f"Error while creating product: {str(e)}"
+            )
+            flash('An error occurred while adding the product', 'error')
 
-    # Form hataları (validate_on_submit değilse veya hata döndüyse)
-    for field, errors in form.errors.items():
-        for error in errors:
-            flash(f'{getattr(form, field).label.text}: {error}', 'error')
+    return render_template(
+        'main/product_form.html',
+        title='Add Product',
+        form=form,
+        selected_lab=selected_lab,
+        labs=[selected_lab]  # Pass labs for location dropdown JS
+    )
 
-    return render_template('main/product_form.html', form=form, title='Add Product', labs=Lab.get_predefined_labs())
 
 @bp.route('/product/<int:id>/edit', methods=['GET', 'POST'])
 @login_required
+@limiter.limit("20 per hour")
 def edit_product(id):
-    """
-    Var olan ürün düzenlemesi.
-    """
+    """Edit an existing product."""
     product = Product.query.get_or_404(id)
+    
+    if not current_user.is_editor():
+        flash('You do not have permission to edit products', 'error')
+        return redirect(url_for('main.dashboard'))
+    
     form = ProductForm(obj=product)
-    # Lab listesini set et
-    form.lab_id.choices = [(lab.id, lab.name) for lab in Lab.query.all()]
+    
+    # Pre-populate the lab_id field
+    form.lab_id.data = product.lab_id
+    
+    if form.validate_on_submit():
+        try:
+            old_quantity = product.quantity
+            loc_parts = form.location.data.split('-')
+            
+            # Direct attribute assignment instead of using update_record()
+            product.name = form.name.data
+            product.registry_number = form.registry_number.data
+            product.quantity = int(form.quantity.data)  # Ensure integer
+            product.unit = form.unit.data
+            product.minimum_quantity = int(form.minimum_quantity.data)  # Ensure integer
+            product.notes = form.notes.data
+            
+            if loc_parts[0] == 'workspace':
+                product.location_type = 'workspace'
+                product.location_number = None
+                product.location_position = None
+            else:
+                product.location_type = 'cabinet'
+                product.location_number = loc_parts[1]
+                product.location_position = loc_parts[2]
+            
+            # Create user log for quantity change
+            if product.quantity != old_quantity:
+                quantity_change = product.quantity - old_quantity
+                create_user_log(
+                    user=current_user,
+                    action_type='edit',
+                    product=product,
+                    lab=product.lab,
+                    quantity=quantity_change,
+                    notes=(
+                        f"Quantity changed from {old_quantity} "
+                        f"to {product.quantity}"
+                    )
+                )
+            
+            db.session.commit()
+            
+            # Send notifications
+            notify_inventory_update(product.id, 'edit', {
+                'name': product.name,
+                'quantity': product.quantity,
+                'unit': product.unit,
+                'location': product.get_location_display()
+            })
+            
+            if product.quantity <= product.minimum_quantity:
+                notify_stock_alert(product.id, {
+                    'name': product.name,
+                    'quantity': product.quantity,
+                    'minimum': product.minimum_quantity,
+                    'unit': product.unit,
+                    'lab': product.lab.code
+                })
+            
+            flash('Product updated successfully', 'success')
+            return redirect(url_for(
+                'main.dashboard',
+                lab=product.lab.code
+            ))
+            
+        except ValueError as ve:
+            db.session.rollback()
+            current_app.logger.exception(
+                f"Validation error while updating product: {str(ve)}"
+            )
+            flash(f'Validation error: {str(ve)}', 'error')
+        except IntegrityError:
+            db.session.rollback()
+            flash('Duplicate registry number in this lab.', 'error')
+        except SQLAlchemyError as e:
+            db.session.rollback()
+            current_app.logger.exception(e)
+            flash('DB error while updating product.', 'error')
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.exception(
+                f"Error while updating product: {str(e)}"
+            )
+            flash('An error occurred while updating the product', 'error')
+    
+    # Pre-populate location field
+    if not form.is_submitted():
+        if product.location_type == 'workspace':
+            form.location.data = 'workspace'
+        else:
+            form.location.data = (
+                f"cabinet-{product.location_number}-"
+                f"{product.location_position}"
+            )
 
-    # location_number defaultu
+    return render_template(
+        'main/product_form.html',
+        title='Edit Product',
+        form=form,
+        selected_lab=product.lab,
+        labs=[product.lab]  # Pass labs for location dropdown JS
+    )
+
+
+@bp.route('/product/<int:id>/delete', methods=['POST'])
+@login_required
+@admin_required
+@limiter.limit("10 per hour")
+def delete_product(id):
+    """Delete a product from inventory."""
+    product = Product.query.get_or_404(id)
+    lab_code = product.lab.code
+    
+    try:
+        db.session.delete(product)
+        db.session.commit()
+        create_user_log(current_user, 'delete', product, product.lab,
+                      -product.quantity, 'Product deleted')
+        flash('Product deleted successfully', 'success')
+    except IntegrityError:
+        db.session.rollback()
+        flash('Cannot delete: product is referenced elsewhere.', 'error')
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        current_app.logger.exception(e)
+        flash('DB error while deleting product.', 'error')
+    
+    return redirect(url_for('main.dashboard', lab=lab_code))
+
+
+@bp.route('/product/<int:product_id>/transfer', methods=['GET', 'POST'])
+@login_required
+@limiter.limit("20 per hour")
+def transfer_product(product_id):
+    """Transfer a product between labs."""
+    source_product = Product.query.join(Lab).filter(Product.id == product_id).first_or_404()
+    
+    if not source_product.lab:
+        flash('Error: Source product has no associated laboratory.', 'danger')
+        return redirect(url_for('main.dashboard'))
+    
+    destination_labs = Lab.query.filter(Lab.id != source_product.lab_id).all()
+    if not destination_labs:
+        flash('No available destination laboratories for transfer.', 'danger')
+        return redirect(url_for('main.dashboard'))
+    
+    form = TransferForm(request.form, 
+                       source_lab_id=source_product.lab_id, 
+                       max_quantity=source_product.quantity,
+                       product=source_product)
+
+    if form.validate_on_submit():
+        target_lab_id = form.destination_lab_id.data
+        transfer_quantity = int(form.quantity.data)  # Ensure integer
+        notes = form.notes.data
+
+        try:
+            destination_lab = Lab.query.get_or_404(target_lab_id)
+
+            # Basic validation checks
+            if transfer_quantity > source_product.quantity:
+                flash('Transfer quantity cannot exceed available quantity!', 'danger')
+                return render_template('main/transfer_form.html', title='Transfer Product', form=form, product=source_product)
+                
+            if transfer_quantity <= 0:
+                flash('Transfer quantity must be positive!', 'danger')
+                return render_template('main/transfer_form.html', title='Transfer Product', form=form, product=source_product)
+
+            clean_registry = source_product.registry_number.strip()
+
+            # ➡️ 1) Kaynak miktarı küçült
+            if source_product.quantity < transfer_quantity:
+                raise ValueError("Transfer quantity exceeds available stock")
+            source_product.quantity -= transfer_quantity
+
+            # ➡️ 2) Hedef ürünü bul / oluştur
+            target_product = Product.query.filter_by(
+                lab_id=target_lab_id,
+                registry_number=clean_registry
+            ).first()
+            if target_product:
+                target_product.quantity += transfer_quantity
+            else:
+                target_product = Product(
+                    name=source_product.name,
+                    registry_number=clean_registry,
+                    quantity=transfer_quantity,
+                    unit=source_product.unit,
+                    minimum_quantity=source_product.minimum_quantity,
+                    location_type='workspace',
+                    notes=notes or source_product.notes,
+                    lab_id=target_lab_id
+                )
+                db.session.add(target_product)
+
+            # ➡️ 3) TransferLog + UserLog
+            transfer_log = TransferLog(
+                product_id           = source_product.id,
+                source_lab_id        = source_product.lab_id,
+                destination_lab_id   = target_lab_id,
+                quantity             = transfer_quantity,
+                notes                = f"{source_product.lab.code} ➜ {destination_lab.code}",
+                created_by_id        = current_user.id
+            )
+            db.session.add(transfer_log)
+
+            create_user_log(current_user, 'transfer', source_product,
+                            source_product.lab, -transfer_quantity,
+                            f"Sent to {destination_lab.code}")
+            create_user_log(current_user, 'transfer', target_product,
+                            destination_lab, transfer_quantity,
+                            f"Received from {source_product.lab.code}")
+
+            # 🔑 Tek seferde kaydet
+            db.session.commit()
+
+            notify_inventory_update(source_product.id, 'transfer', {
+                'name'           : source_product.name,
+                'quantity'       : source_product.quantity,
+                'source_lab'     : source_product.lab_id,
+                'destination_lab': target_lab_id
+            })
+            flash('Product transferred successfully!', 'success')
+            return redirect(url_for('main.dashboard', lab=source_product.lab.code))
+
+        except (InvalidRequestError, SQLAlchemyError) as db_err:
+            db.session.rollback()
+            current_app.logger.exception(f"DB error during transfer: {db_err}")
+            flash('Database error during transfer. Please try again.', 'danger')
+
+        except ValueError as ve:
+            db.session.rollback()
+            flash(str(ve), 'warning')
+
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.exception(f"Unexpected error: {e}")
+            flash('Unexpected error during transfer.', 'danger')
+
+    return render_template('main/transfer_form.html', title='Transfer Product', form=form, product=source_product)
+
+
+#######################################################################
+#  - - -  BU İKİ ROUTE LAB-ID BAZLI DÜZENLEME/SİLME İSTEYENLER İÇİN - -
+#######################################################################
+
+@bp.route('/lab/<int:lab_id>/product/<int:product_id>/edit', methods=['GET', 'POST'])
+@login_required
+def edit_lab_product(lab_id, product_id):
+    """Edit a product in a specific lab."""
+    lab = Lab.query.get_or_404(lab_id)
+    product = Product.query.filter_by(id=product_id, lab_id=lab_id).first_or_404()
+
+    form = ProductForm(obj=product)
+    form.lab_id.choices = [(lab.id, f"{lab.code} - {lab.description}")]
+    form.lab_id.data = lab.id
+
     if product.location_type == 'workspace':
         form.location_number.data = 'workspace'
     else:
@@ -206,13 +688,7 @@ def edit_product(id):
     if form.validate_on_submit():
         try:
             old_quantity = product.quantity
-            product.name = form.name.data
-            product.registry_number = form.registry_number.data
-            product.quantity = form.quantity.data
-            product.unit = form.unit.data
-            product.minimum_quantity = form.minimum_quantity.data
 
-            # Lokasyon parse
             loc_parts = form.location_number.data.split('-')
             if loc_parts[0] == 'workspace':
                 product.location_type = 'workspace'
@@ -223,62 +699,73 @@ def edit_product(id):
                 product.location_number = loc_parts[1]
                 product.location_position = loc_parts[2]
 
+            product.name = form.name.data
+            product.registry_number = form.registry_number.data
+            product.quantity = form.quantity.data
+            product.unit = form.unit.data
+            product.minimum_quantity = form.minimum_quantity.data
             product.notes = form.notes.data
-            product.lab_id = form.lab_id.data
 
-            # Miktar değiştiyse log
             if old_quantity != product.quantity:
+                diff = product.quantity - old_quantity
                 create_user_log(
                     user=current_user,
                     action_type='edit',
                     product=product,
-                    lab=product.lab,
-                    quantity=product.quantity - old_quantity,
+                    lab=lab,
+                    quantity=diff,
                     notes="Edited product quantity"
                 )
 
             db.session.commit()
-            flash('Product updated successfully!', 'success')
-            return redirect(url_for('main.dashboard'))
+            flash(f'Product in {lab.code} updated successfully!', 'success')
+            return redirect(url_for('main.dashboard', lab=lab.code))
+
         except Exception as e:
             db.session.rollback()
             flash('Error updating product. Please try again.', 'error')
 
-    return render_template('main/product_form.html', form=form, title='Edit Product', labs=Lab.get_predefined_labs())
+    return render_template('main/product_form.html', form=form,
+                           title=f"Edit Product in {lab.code}",
+                           labs=[lab])
 
-@bp.route('/product/<int:id>/delete', methods=['POST'])
+
+@bp.route('/lab/<int:lab_id>/product/<int:product_id>/delete', methods=['POST'])
 @login_required
 @admin_required
-def delete_product(id):
-    """
-    Ürün silme işlemi (admin).
-    """
+def delete_lab_product(lab_id, product_id):
+    """Delete a product from a specific lab."""
     try:
-        product = Product.query.get_or_404(id)
-        # Log
+        lab = Lab.query.get_or_404(lab_id)
+        product = Product.query.filter_by(id=product_id, lab_id=lab_id).first_or_404()
+
         create_user_log(
             user=current_user,
             action_type='delete',
             product=product,
-            lab=product.lab,
+            lab=lab,
             quantity=-product.quantity,
-            notes=f"Deleted product {product.name}"
+            notes=f"Deleted product {product.name} from lab {lab.code}"
         )
+
         db.session.delete(product)
         db.session.commit()
-        flash('Product deleted successfully!', 'success')
+        flash(f'Product "{product.name}" deleted successfully from {lab.code}!', 'success')
     except Exception as e:
         db.session.rollback()
         flash('Error deleting product. Please try again.', 'error')
-    
-    return redirect(url_for('main.dashboard'))
+
+    return redirect(url_for('main.dashboard', lab=lab.code))
+
+
+#######################################################################
+#  TRANSFER ROUTE
+#######################################################################
 
 @bp.route('/transfer', methods=['GET', 'POST'])
 @login_required
-def transfer_product():
-    """
-    Transfer formu. Source lab -> Destination lab.
-    """
+def transfer_between_labs():
+    """Transfer products between labs."""
     form = TransferForm()
     form.source_lab_id.choices = [(lab.id, lab.name) for lab in Lab.query.all()]
     form.destination_lab_id.choices = [(lab.id, lab.name) for lab in Lab.query.all()]
@@ -288,31 +775,36 @@ def transfer_product():
         source_lab_id = form.source_lab_id.data
         destination_lab_id = form.destination_lab_id.data
 
+        source_lab = Lab.query.get(source_lab_id)
+        destination_lab = Lab.query.get(destination_lab_id)
+        
+        if not source_lab or not destination_lab:
+            flash('Invalid source or destination laboratory.', 'error')
+            return redirect(url_for('main.transfer_between_labs'))
+
         if source_lab_id == destination_lab_id:
             flash('Source and destination labs cannot be the same.', 'error')
-            return redirect(url_for('main.transfer_product'))
+            return redirect(url_for('main.transfer_between_labs'))
 
         try:
             db.session.begin_nested()
 
             product = Product.query.get_or_404(form.product_id.data)
-            if product.lab_id != source_lab_id:
+            if not product or product.lab_id != source_lab_id:
                 flash('Selected product does not belong to the source lab.', 'error')
                 db.session.rollback()
-                return redirect(url_for('main.transfer_product'))
+                return redirect(url_for('main.transfer_between_labs'))
 
             transfer_qty = form.quantity.data
             if product.quantity < transfer_qty:
                 flash('Insufficient quantity in the source lab.', 'error')
                 db.session.rollback()
-                return redirect(url_for('main.transfer_product'))
+                return redirect(url_for('main.transfer_between_labs'))
 
-            # Kaynaktan düş
             old_quantity = product.quantity
             product.quantity = old_quantity - transfer_qty
-            db.session.flush()  # Veritabanına yaz ama commit etme
+            db.session.flush()
 
-            # Hedef lab’da aynı registry_number varsa ekle, yoksa yeni oluştur
             dest_product = Product.query.filter_by(registry_number=product.registry_number, lab_id=destination_lab_id).first()
             if dest_product:
                 dest_product.quantity += transfer_qty
@@ -331,34 +823,31 @@ def transfer_product():
                 )
                 db.session.add(dest_product)
 
-            # Transfer Log
             transfer_log = TransferLog(
                 product_id=product.id,
                 source_lab_id=source_lab_id,
                 destination_lab_id=destination_lab_id,
                 quantity=transfer_qty,
-                notes=form.notes.data,
+                notes=f"Transferred from {source_lab.code} to {destination_lab.code}",
                 created_by_id=current_user.id
             )
             db.session.add(transfer_log)
 
-            # User Log (source)
             create_user_log(
                 user=current_user,
                 action_type='transfer',
                 product=product,
-                lab=product.lab,
+                lab=source_lab,
                 quantity=-transfer_qty,
-                notes=f"Transferred out {transfer_qty} from {product.lab.code} to lab_id={destination_lab_id}"
+                notes=f"Transferred out {transfer_qty} from {source_lab.code} to {destination_lab.code}"
             )
-            # User Log (destination)
             create_user_log(
                 user=current_user,
                 action_type='transfer',
                 product=dest_product,
-                lab=dest_product.lab,
+                lab=destination_lab,
                 quantity=transfer_qty,
-                notes=f"Received {transfer_qty} from {product.lab.code}"
+                notes=f"Received {transfer_qty} from {source_lab.code}"
             )
 
             db.session.commit()
@@ -383,26 +872,20 @@ def transfer_product():
     return render_template('main/transfer_form.html', form=form, title='Transfer Product')
 
 
-########################################################################
-#  - - - - - - -  EXPORT ROTALARI (PDF/XLSX/DOCX) - - - - - - - -       #
-########################################################################
+#######################################################################
+#  - - - - - - -  EXPORT ROTALARI (PDF / XLSX / DOCX) - - - - - - - - -
+#######################################################################
 
 @bp.route('/export/<lab_code>/<format>')
 @login_required
+@limiter.limit("10 per minute")
 def export_lab(lab_code, format):
-    """
-    Tek bir lab'ın envanterini PDF, Excel veya Word formatında döndürür.
-    lab_code => Lab.code
-    format => pdf / xlsx / docx
-    """
-
-    # Lab sorgula, yoksa 404
+    """Export lab inventory with streaming response."""
     lab = Lab.query.filter_by(code=lab_code).first_or_404()
+    products = Product.query.filter_by(lab_id=lab.id)\
+        .options(joinedload(Product.lab))\
+        .all()
 
-    # Ürünleri çek
-    products = Product.query.filter_by(lab_id=lab.id).all()
-
-    # DataFrame için verileri hazırlayalım
     data = []
     for product in products:
         data.append({
@@ -415,132 +898,57 @@ def export_lab(lab_code, format):
             'Notes': product.notes or ''
         })
 
-    df = pd.DataFrame(data)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = format_timestamp(datetime.utcnow())\
+        .strftime('%Y%m%d_%H%M%S')
     filename = f"inventory_{lab.code}_{timestamp}"
 
-    # 1) EXCEL
     if format == 'xlsx':
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, sheet_name='Lab Inventory', index=False)
-            workbook = writer.book
-            worksheet = writer.sheets['Lab Inventory']
-            header_format = workbook.add_format({
-                'bold': True,
-                'bg_color': '#4F81BD',
-                'font_color': 'white',
-                'border': 1
-            })
-            for col_num, value in enumerate(df.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-                max_len = max(df[value].astype(str).apply(len).max(), len(value))
-                worksheet.set_column(col_num, col_num, max_len + 2)
-        output.seek(0)
-        return send_file(
-            output,
-            download_name=f"{filename}.xlsx",
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            as_attachment=True
+        return Response(
+            stream_with_context(generate_excel(data)),
+            mimetype=(
+                "application/vnd.openxmlformats-officedocument"
+                ".spreadsheetml.sheet"
+            ),
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}.xlsx"
+            }
         )
-
-    # 2) PDF
     elif format == 'pdf':
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter)
-        elements = []
-        styles = getSampleStyleSheet()
-
-        elements.append(Paragraph(f"Lab Inventory Report - {lab.code}", styles['Title']))
-        elements.append(Paragraph(
-            f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}", 
-            styles['Normal']
-        ))
-
-        table_data = [
-            ['Name', 'Registry #', 'Quantity', 'Unit', 'Min Qty', 'Location', 'Notes']
-        ]
-        for row in data:
-            table_data.append([
-                row['Name'],
-                row['Registry Number'],
-                str(row['Quantity']),
-                row['Unit'],
-                str(row['Minimum Quantity']),
-                row['Location'],
-                row['Notes']
-            ])
-
-        table = Table(table_data)
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ]))
-        elements.append(table)
-
-        doc.build(elements)
-        buffer.seek(0)
-        return send_file(
-            buffer,
-            download_name=f"{filename}.pdf",
+        return Response(
+            stream_with_context(generate_pdf(data, lab.code)),
             mimetype='application/pdf',
-            as_attachment=True
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}.pdf"
+            }
         )
-
-    # 3) DOCX
     elif format == 'docx':
-        doc = Document()
-        doc.add_heading(f"Lab Inventory Report - {lab.code}", 0)
-        doc.add_paragraph(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-
-        table = doc.add_table(rows=1, cols=7)
-        table.style = 'Table Grid'
-        hdr_cells = table.rows[0].cells
-        headers = ['Name', 'Registry #', 'Quantity', 'Unit', 'Min Qty', 'Location', 'Notes']
-        for i, h in enumerate(headers):
-            hdr_cells[i].text = h
-
-        for row in data:
-            row_cells = table.add_row().cells
-            row_cells[0].text = row['Name']
-            row_cells[1].text = row['Registry Number']
-            row_cells[2].text = str(row['Quantity'])
-            row_cells[3].text = row['Unit']
-            row_cells[4].text = str(row['Minimum Quantity'])
-            row_cells[5].text = row['Location']
-            row_cells[6].text = row['Notes']
-
-        buffer = io.BytesIO()
-        doc.save(buffer)
-        buffer.seek(0)
-
-        return send_file(
-            buffer,
-            download_name=f"{filename}.docx",
-            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            as_attachment=True
+        return Response(
+            stream_with_context(generate_word(data, lab.code)),
+            mimetype=(
+                "application/vnd.openxmlformats-officedocument"
+                ".wordprocessingml.document"
+            ),
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}.docx"
+            }
         )
 
-    else:
-        return "Format not supported", 400
+    return "Format not supported", 400
 
 
 @bp.route('/export/all/<format>')
 @login_required
+@limiter.limit("5 per minute")
 def export_all_labs(format):
-    """
-    Tüm laboratuvarların envanterini PDF, Excel veya Word formatında döndürür.
-    format => pdf / xlsx / docx
-    """
+    """Export all labs inventory with streaming response."""
     labs = Lab.query.all()
     all_data = []
 
     for lab in labs:
-        products = Product.query.filter_by(lab_id=lab.id).all()
+        products = Product.query.filter_by(lab_id=lab.id)\
+            .options(joinedload(Product.lab))\
+            .all()
+            
         for product in products:
             all_data.append({
                 'Lab': f"{lab.code} - {lab.description}",
@@ -553,146 +961,120 @@ def export_all_labs(format):
                 'Notes': product.notes or ''
             })
 
-    # Boşsa uyarı
     if not all_data:
         flash('No data available to export', 'warning')
         return redirect(url_for('main.dashboard'))
 
-    df = pd.DataFrame(all_data)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    timestamp = format_timestamp(datetime.utcnow())\
+        .strftime('%Y%m%d_%H%M%S')
     filename = f"full_inventory_{timestamp}"
 
-    # 1) XLSX
     if format == 'xlsx':
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df.to_excel(writer, sheet_name='All Labs', index=False)
-            workbook = writer.book
-            worksheet = writer.sheets['All Labs']
-            header_format = workbook.add_format({
-                'bold': True,
-                'bg_color': '#4F81BD',
-                'font_color': 'white',
-                'border': 1
-            })
-            for col_num, value in enumerate(df.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-                max_len = max(df[value].astype(str).apply(len).max(), len(value))
-                worksheet.set_column(col_num, col_num, max_len + 2)
-        output.seek(0)
-        return send_file(
-            output,
-            download_name=f"{filename}.xlsx",
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            as_attachment=True
+        return Response(
+            stream_with_context(generate_excel(all_data)),
+            mimetype=(
+                "application/vnd.openxmlformats-officedocument"
+                ".spreadsheetml.sheet"
+            ),
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}.xlsx"
+            }
         )
-
-    # 2) PDF
     elif format == 'pdf':
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter)
-        elements = []
-        styles = getSampleStyleSheet()
-
-        elements.append(Paragraph("All Labs Inventory Report", styles['Title']))
-        elements.append(Paragraph(
-            f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}", 
-            styles['Normal']
-        ))
-
-        table_data = [
-            ['Lab', 'Name', 'Registry #', 'Quantity', 'Unit', 'Min Qty', 'Location', 'Notes']
-        ]
-        for _, row in df.iterrows():
-            table_data.append([
-                row['Lab'],
-                row['Name'],
-                row['Registry Number'],
-                str(row['Quantity']),
-                row['Unit'],
-                str(row['Minimum Quantity']),
-                row['Location'],
-                row['Notes']
-            ])
-
-        table = Table(table_data)
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ]))
-        elements.append(table)
-
-        doc.build(elements)
-        buffer.seek(0)
-        return send_file(
-            buffer,
-            download_name=f"{filename}.pdf",
+        return Response(
+            stream_with_context(generate_pdf(all_data)),
             mimetype='application/pdf',
-            as_attachment=True
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}.pdf"
+            }
         )
-
-    # 3) DOCX
     elif format == 'docx':
-        doc = Document()
-        doc.add_heading("All Labs Inventory Report", 0)
-        doc.add_paragraph(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-
-        table = doc.add_table(rows=1, cols=8)
-        table.style = 'Table Grid'
-        hdr = table.rows[0].cells
-        hdr[0].text = 'Lab'
-        hdr[1].text = 'Name'
-        hdr[2].text = 'Registry #'
-        hdr[3].text = 'Quantity'
-        hdr[4].text = 'Unit'
-        hdr[5].text = 'Min Qty'
-        hdr[6].text = 'Location'
-        hdr[7].text = 'Notes'
-
-        for _, row in df.iterrows():
-            row_cells = table.add_row().cells
-            row_cells[0].text = str(row['Lab'])
-            row_cells[1].text = str(row['Name'])
-            row_cells[2].text = str(row['Registry Number'])
-            row_cells[3].text = str(row['Quantity'])
-            row_cells[4].text = str(row['Unit'])
-            row_cells[5].text = str(row['Minimum Quantity'])
-            row_cells[6].text = str(row['Location'])
-            row_cells[7].text = str(row['Notes'])
-
-        buffer = io.BytesIO()
-        doc.save(buffer)
-        buffer.seek(0)
-
-        return send_file(
-            buffer,
-            download_name=f"{filename}.docx",
-            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            as_attachment=True
+        return Response(
+            stream_with_context(generate_word(all_data)),
+            mimetype=(
+                "application/vnd.openxmlformats-officedocument"
+                ".wordprocessingml.document"
+            ),
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}.docx"
+            }
         )
 
-    else:
-        return "Format not supported", 400
+    return "Format not supported", 400
 
 
-########################################################################
-# Ek olarak, user_logs fonksiyonu da istersen buraya ekleyebilirsin:
-########################################################################
+#######################################################################
+# USER ACTIVITY LOG GÖRÜNTÜLEME (ADMIN)
+#######################################################################
 
 @bp.route('/logs')
 @login_required
 @admin_required
 def user_logs():
-    """
-    Kullanıcı aksiyon loglarını listeler. 
-    """
+    """List user activity logs."""
     page = request.args.get('page', 1, type=int)
-    per_page = 20
-    logs = UserLog.query.order_by(UserLog.timestamp.desc()).paginate(page=page, per_page=per_page, error_out=False)
-    return render_template('main/user_logs.html', 
-                           title='User Activity Logs',
-                           logs=logs)
+    logs = UserLog.query.order_by(
+        UserLog.timestamp.desc()
+    ).paginate(
+        page=page,
+        per_page=50
+    )
+    return render_template(
+        'main/user_logs.html',
+        title='User Activity Logs',
+        logs=logs
+    )
+
+
+@bp.route('/search')
+@login_required
+@limiter.limit("30 per minute")
+def search_products():
+    """Search products by name or registry number."""
+    query = request.args.get('q', '')
+    lab_code = request.args.get('lab', 'all')
+    
+    if lab_code != 'all':
+        lab = Lab.query.filter_by(code=lab_code).first_or_404()
+        products = Product.search(query, lab.id)
+    else:
+        products = Product.search(query)
+    
+    return render_template('main/search_results.html',
+                         title='Search Results',
+                         query=query,
+                         products=products,
+                         selected_lab_code=lab_code)
+
+
+# Commented out as per requirements to disable lab creation
+# @bp.route('/lab/add', methods=['GET', 'POST'])
+# @login_required
+# @admin_required
+# def add_lab():
+#     """Add a new laboratory."""
+#     form = LabForm()
+#     if form.validate_on_submit():
+#         try:
+#             lab = Lab(
+#                 name=form.name.data,
+#                 description=form.description.data,
+#                 location=form.location.data
+#             )
+#             db.session.add(lab)
+#             db.session.commit()
+#             flash('Laboratory added successfully', 'success')
+#             return redirect(url_for('main.dashboard'))
+#         except IntegrityError:
+#             db.session.rollback()
+#             flash('A lab with this name already exists', 'error')
+#         except Exception as e:
+#             db.session.rollback()
+#             current_app.logger.error(f"Error adding lab: {str(e)}")
+#             flash('An error occurred while adding the lab', 'error')
+#     
+#     return render_template(
+#         'main/lab_form.html',
+#         title='Add Laboratory',
+#         form=form
+#     )

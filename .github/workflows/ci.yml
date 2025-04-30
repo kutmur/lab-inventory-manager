@@ -1,0 +1,110 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.9, "3.10"]
+
+    services:
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+        options: --health-cmd="redis-cli ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/requirements-dev.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+        pip install pip-audit
+
+    - name: Initialize database and run migrations
+      run: |
+        FLASK_APP=manage.py python - <<'PY'
+        from app import create_app, db
+        app = create_app()
+        with app.app_context():
+            db.create_all()
+        PY
+        python migrations/pre_deploy.py
+      env:
+        FLASK_ENV: testing
+        SECRET_KEY: dummy
+        SQLALCHEMY_DATABASE_URI: "sqlite:///test.db"
+        DATABASE_URL: "sqlite:///test.db"
+        ADMIN_USERNAME: admin
+        ADMIN_EMAIL: admin@example.com
+        ADMIN_PASSWORD: password123
+        REDIS_URL: redis://localhost:6379
+
+    - name: Run linting
+      run: flake8 .
+
+    - name: Run type checking
+      run: mypy app
+
+    - name: Run security audit
+      run: pip-audit --fail-on high,critical
+
+    - name: Run tests
+      run: pytest --cov=app tests/
+      env:
+        FLASK_ENV: testing
+        SECRET_KEY: dummy
+        SQLALCHEMY_DATABASE_URI: "sqlite:///test.db"
+        DATABASE_URL: "sqlite:///test.db"
+        ADMIN_USERNAME: admin
+        ADMIN_EMAIL: admin@example.com
+        ADMIN_PASSWORD: password123
+        REDIS_URL: redis://localhost:6379
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        fail_ci_if_error: true
+
+  deploy:
+    needs: check
+    if: github.ref == 'refs/heads/main' && success()
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Deploy to Render
+      env:
+        # Tercih ediyorsan URL’yi bir GitHub secret’ına taşı (örn. RENDER_DEPLOY_HOOK_URL)
+        # ve aşağıdaki satırı `RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}` olarak değiştir.
+        RENDER_DEPLOY_HOOK_URL: "https://api.render.com/deploy/srv-d033ctruibrs73bcr7h0?key=XsAB4XtHwMs"
+      run: |
+        if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+          echo "Error: RENDER_DEPLOY_HOOK_URL is not set"
+          exit 1
+        fi
+        curl --fail -H "Content-Type: application/json" -d '{}' "$RENDER_DEPLOY_HOOK_URL"

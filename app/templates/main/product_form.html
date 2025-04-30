@@ -1,102 +1,125 @@
+<!-- templates/main/product_form.html -->
+
 {% extends "base.html" %}
 
 {% block content %}
 <div class="container">
     <div class="row justify-content-center">
         <div class="col-md-8">
+
             <div class="card">
                 <div class="card-header">
                     <h2 class="h5 mb-0">{{ title }}</h2>
                 </div>
                 <div class="card-body">
+
+                    <!-- Product add/edit form -->
                     <form method="POST" id="productForm">
                         {{ form.hidden_tag() }}
-                        
-                        <!-- NAME -->
+
+                        <!-- Product Name -->
                         <div class="mb-3">
                             {{ form.name.label(class="form-label") }}
                             {{ form.name(class="form-control") }}
+                            {% for error in form.name.errors %}
+                                <div class="text-danger">{{ error }}</div>
+                            {% endfor %}
                         </div>
 
-                        <!-- REGISTRY NUMBER -->
+                        <!-- Registry Number -->
                         <div class="mb-3">
                             {{ form.registry_number.label(class="form-label") }}
                             {{ form.registry_number(class="form-control") }}
+                            {% for error in form.registry_number.errors %}
+                                <div class="text-danger">{{ error }}</div>
+                            {% endfor %}
                         </div>
 
-                        <!-- QUANTITY -->
+                        <!-- Quantity -->
                         <div class="mb-3">
                             {{ form.quantity.label(class="form-label") }}
-                            {{ form.quantity(class="form-control") }}
+                            {{ form.quantity(class="form-control", type="number", step="1", min="0") }}
+                            {% for error in form.quantity.errors %}
+                                <div class="text-danger">{{ error }}</div>
+                            {% endfor %}
                         </div>
 
-                        <!-- UNIT -->
+                        <!-- Unit -->
                         <div class="mb-3">
                             {{ form.unit.label(class="form-label") }}
                             {{ form.unit(class="form-control") }}
+                            {% for error in form.unit.errors %}
+                                <div class="text-danger">{{ error }}</div>
+                            {% endfor %}
                         </div>
 
-                        <!-- MINIMUM QUANTITY -->
+                        <!-- Minimum Quantity -->
                         <div class="mb-3">
                             {{ form.minimum_quantity.label(class="form-label") }}
-                            {{ form.minimum_quantity(class="form-control") }}
+                            {{ form.minimum_quantity(class="form-control", type="number", step="1", min="0") }}
+                            {% for error in form.minimum_quantity.errors %}
+                                <div class="text-danger">{{ error }}</div>
+                            {% endfor %}
                         </div>
 
                         <!-- LAB SELECTION -->
                         <div class="mb-3">
                             {{ form.lab_id.label(class="form-label") }}
                             {{ form.lab_id(class="form-control") }}
+                            {% for error in form.lab_id.errors %}
+                                <div class="text-danger">{{ error }}</div>
+                            {% endfor %}
                         </div>
 
                         <!-- LOCATION -->
                         <div class="mb-3">
-                            {{ form.location_number.label(class="form-label") }}
-                            {{ form.location_number(class="form-control") }}
-                            {# JS ile doldurulacak #}
+                            {{ form.location.label(class="form-label") }}
+                            {{ form.location(class="form-control") }}
+                            {% for error in form.location.errors %}
+                                <div class="text-danger">{{ error }}</div>
+                            {% endfor %}
                         </div>
 
                         <!-- NOTES -->
                         <div class="mb-3">
                             {{ form.notes.label(class="form-label") }}
-                            {{ form.notes(class="form-control") }}
+                            {{ form.notes(class="form-control", rows="3") }}
                         </div>
-                        
+
                         <!-- SUBMIT BUTTON -->
-                        {{ form.submit(class="btn btn-primary") }}
-                        <a href="{{ url_for('main.dashboard') }}" class="btn btn-secondary">
-                            Cancel
-                        </a>
+                        {{ form.submit(class="btn btn-primary w-100") }}
+
                     </form>
-                </div>
-            </div>
+
+                </div> <!-- card-body -->
+            </div> <!-- card -->
+
         </div>
     </div>
 </div>
 
-<!-- JavaScript: Dinamik konum seçenekleri -->
+<!-- JAVASCRIPT: Dynamically populate location options based on selected lab -->
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const labSelect = document.getElementById('{{ form.lab_id.id }}');
-    const locationSelect = document.getElementById('{{ form.location_number.id }}');
+    const locationSelect = document.getElementById('{{ form.location.id }}');
 
-    // locationChoices sözlüğünü doldurmak için, her lab_id'ye karşılık
-    // form.get_location_choices(lab.id) fonskiyonu ile elde edeceğimiz
-    // [ [value, label], [value, label], ... ] listesi
-    // Sunucu tarafında (Python) jinja ile tojson kullanarak gömeceğiz:
+    // List of all labs and their location choices
     const locationChoices = {
         {% for lab in labs %}
-          {{ lab.id }}: {{ form.get_location_choices(lab.id) | tojson }},
+           {{ lab.id }}: {{ form.get_location_choices(lab.id) | tojson }},
         {% endfor %}
     };
 
     function updateLocationChoices() {
         const selectedLabId = labSelect.value;
+        // Get location options for selected lab
         const choices = locationChoices[selectedLabId] || [];
 
-        // Önce "location_number" select içini temizle
+        // Clear existing options
         locationSelect.innerHTML = '';
 
-        // Seçenek ekliyoruz
+        // Add new options
         choices.forEach(([value, label]) => {
             const option = document.createElement('option');
             option.value = value;
@@ -104,7 +127,7 @@ document.addEventListener('DOMContentLoaded', function() {
             locationSelect.appendChild(option);
         });
 
-        // Hiç lab seçilmemişse disable edebiliriz; seçildiyse enable
+        // Enable/disable location dropdown based on lab selection
         if (selectedLabId) {
             locationSelect.disabled = false;
         } else {
@@ -112,9 +135,11 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Sayfa ilk yüklendiğinde ve her lab değiştiğinde güncelle
+    // Update location choices when lab changes
     labSelect.addEventListener('change', updateLocationChoices);
-    updateLocationChoices();  // sayfa yüklenince ilk defa
+
+    // Run once on page load
+    updateLocationChoices();
 });
 </script>
 {% endblock %}

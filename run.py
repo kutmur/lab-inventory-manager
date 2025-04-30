@@ -1,83 +1,88 @@
+#!/usr/bin/env python
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file, fallback to .env.development
+env_path = Path('.env')
+if not env_path.exists():
+    env_path = Path('.env.development')
+load_dotenv(env_path)
+
 from app import create_app, db
 from app.extensions import socketio
-from dotenv import load_dotenv
-from app.models import User, Lab, Product
-from flask import request, redirect, url_for, render_template, send_file
-from app.main.forms import ProductForm
-import uuid
+from app.models import User, Lab
 
-load_dotenv()
 
 app = create_app()
 
-# Create tables and admin user within application context
-if __name__ == '__main__':
+
+def init_database():
+    """Initialize database with default data"""
     with app.app_context():
-        # Drop all tables and recreate them
-        db.drop_all()
         db.create_all()
-        
-        # Create admin user
-        admin = User(username='admin', email='admin@example.com', role='admin')
-        admin.set_password('admin123')
-        
+        print("Database tables created fresh.")
+
+        # Create admin user from environment variables
+        admin = User.query.filter_by(
+            username=app.config['ADMIN_USERNAME']
+        ).first()
+        if not admin:
+            admin = User(
+                username=app.config['ADMIN_USERNAME'],
+                email=app.config['ADMIN_EMAIL'],
+                role='admin'
+            )
+            admin.set_password(app.config['ADMIN_PASSWORD'])
+            db.session.add(admin)
+            print('Admin user created')
+
+        # Create editor user from environment variables
+        editor = User.query.filter_by(
+            username=app.config['EDITOR_USERNAME']
+        ).first()
+        if not editor:
+            editor = User(
+                username=app.config['EDITOR_USERNAME'],
+                email=app.config['EDITOR_EMAIL'],
+                role='editor'
+            )
+            editor.set_password(app.config['EDITOR_PASSWORD'])
+            db.session.add(editor)
+            print('Editor user created')
+
         # Create predefined labs
         Lab.get_predefined_labs()
         
-        db.session.add(admin)
-        db.session.commit()
-        print('Database initialized with admin user and predefined labs')
-
-    # Use socketio.run with explicit host and port
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
-
-@app.route('/success/<name>')
-def success(name):
-    return 'welcome %s' % name
-
-@app.route('/login', methods=['POST', 'GET'])
-def login():
-    if request.method == 'POST':
-        # Use get() to avoid KeyError if 'nm' is missing
-        user = request.form.get('nm', '')
-        if user:  # Check if user name is not empty
-            return redirect(url_for('success', name=user))
-        else:
-            return render_template('login.html', error="Please enter a name")
-    
-    # GET request - show login form
-    return render_template('login.html')  # Note the quotes around template name 
-
-@app.route('/add_product', methods=['GET', 'POST'])
-def add_product():
-    form = ProductForm()  # Instantiate the form
-    if request.method == 'POST':
-        if form.validate_on_submit():
-            # Assuming you have a Product model with a lab_id field
-            selected_lab_id = form.lab_id.data
-            new_product = Product(
-                name=form.name.data,
-                registry_number=form.registry_number.data,
-                quantity=form.quantity.data,
-                unit=form.unit.data,
-                minimum_quantity=form.minimum_quantity.data,
-                location_in_lab=form.location_in_lab.data,
-                lab_id=selected_lab_id,
-                notes=form.notes.data
-            )
-            db.session.add(new_product)
+        try:
             db.session.commit()
-            return redirect(url_for('success', name=new_product.name))
-    return render_template('add_product.html', form=form)
+            print('Database initialized successfully')
+        except Exception as e:
+            db.session.rollback()
+            print(f'Error initializing database: {str(e)}')
+            return False
+    return True
 
-@app.route('/export/<lab_code>/<format>')
-def export_lab(lab_code, format):
-    # Logic to generate and return the file for the specific lab
-    # Example: return send_file('path/to/generated/file', as_attachment=True)
-    pass
 
-@app.route('/export/all/<format>')
-def export_all_labs(format):
-    # Logic to generate and return the combined file for all labs
-    # Example: return send_file('path/to/generated/file', as_attachment=True)
-    pass
+if __name__ == '__main__':
+    # Check if this is development environment
+    if os.environ.get('FLASK_ENV') == 'development':
+        # Initialize database if it doesn't exist or is empty
+        db_path = os.path.join(os.path.dirname(__file__), 'app.db')
+        if not os.path.exists(db_path):
+            print("Creating new database...")
+            init_database()
+        else:
+            with app.app_context():
+                # Check if users table is empty
+                user_count = User.query.count()
+                if user_count == 0:
+                    print("Database exists but empty, reinitializing...")
+                    init_database()
+                else:
+                    print('Using existing database with users.')
+
+        socketio.run(app, debug=True)
+    else:
+        # Production mode - let gunicorn handle the serving
+        socketio.run(app, debug=app.config['DEBUG'])
