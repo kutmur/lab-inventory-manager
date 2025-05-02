@@ -77,3 +77,13 @@ body {
         margin: 0 -10px;
     }
 }
+
+/* Footer credit */
+.credit {
+    position: fixed;
+    bottom: 0.5rem;
+    right: 0.5rem;
+    font-size: 0.75rem;
+    color: #6c757d; /* muted grey */
+    z-index: 9999; /* stay on top */
+}
