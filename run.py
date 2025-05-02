@@ -16,6 +16,13 @@ from app.models import User, Lab
 
 app = create_app()
 
+# Validate production configuration at runtime
+if os.environ.get('FLASK_ENV') == 'production':
+    if not app.config.get('SQLALCHEMY_DATABASE_URI'):
+        raise ValueError("DATABASE_URL must be set in production")
+    if not app.config.get('REDIS_URL'):
+        raise ValueError("REDIS_URL must be set in production")
+
 
 def init_database():
     """Initialize database with default data"""
