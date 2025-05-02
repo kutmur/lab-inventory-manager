@@ -48,13 +48,13 @@ jobs:
 
     - name: Initialize database and run migrations
       run: |
-        FLASK_APP=manage.py python - <<'PY'
+        PYTHONPATH=. FLASK_APP=manage.py python - <<'PY'
         from app import create_app, db
         app = create_app()
         with app.app_context():
             db.create_all()
         PY
-        python migrations/pre_deploy.py
+        PYTHONPATH=. python migrations/pre_deploy.py
       env:
         FLASK_ENV: testing
         SECRET_KEY: dummy
@@ -75,7 +75,7 @@ jobs:
       run: pip-audit --fail-on high,critical
 
     - name: Run tests
-      run: pytest --cov=app tests/
+      run: PYTHONPATH=. pytest --cov=app tests/
       env:
         FLASK_ENV: testing
         SECRET_KEY: dummy
@@ -99,7 +99,7 @@ jobs:
     steps:
     - name: Deploy to Render
       env:
-        # Tercih ediyorsan URL’yi bir GitHub secret’ına taşı (örn. RENDER_DEPLOY_HOOK_URL)
+        # Tercih ediyorsan URL'yi bir GitHub secret'ına taşı (örn. RENDER_DEPLOY_HOOK_URL)
         # ve aşağıdaki satırı `RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}` olarak değiştir.
         RENDER_DEPLOY_HOOK_URL: "https://api.render.com/deploy/srv-d033ctruibrs73bcr7h0?key=XsAB4XtHwMs"
       run: |

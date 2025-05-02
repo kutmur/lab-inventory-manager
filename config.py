@@ -90,26 +90,13 @@ class ProductionConfig(Config):
     DEBUG = False
     TESTING = False
     
-    @property
-    def SQLALCHEMY_DATABASE_URI(self):
-        # Fix Render's DATABASE_URL if needed
-        uri = os.environ.get('DATABASE_URL')
-        if uri and uri.startswith('postgres://'):
-            uri = uri.replace('postgres://', 'postgresql://', 1)
-        if not uri:
-            raise ValueError("DATABASE_URL must be set in production")
-        return uri
+    # Fix Render's DATABASE_URL if needed
+    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL')
+    if SQLALCHEMY_DATABASE_URI and SQLALCHEMY_DATABASE_URI.startswith('postgres://'):
+        SQLALCHEMY_DATABASE_URI = SQLALCHEMY_DATABASE_URI.replace('postgres://', 'postgresql://', 1)
     
-    @property
-    def REDIS_URL(self):
-        redis_url = os.environ.get('REDIS_URL')
-        if os.environ.get('FLASK_ENV') == 'production' and not redis_url:
-            raise ValueError("REDIS_URL must be set in production")
-        return redis_url or super().REDIS_URL
-    
-    @property
-    def RATELIMIT_STORAGE_URL(self):
-        return self.REDIS_URL
+    REDIS_URL = os.environ.get('REDIS_URL') or Config.REDIS_URL
+    RATELIMIT_STORAGE_URL = REDIS_URL
     
     # Production security settings
     SESSION_COOKIE_SECURE = True
