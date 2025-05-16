@@ -18,13 +18,13 @@ The system includes the following predefined laboratories:
 
 | Code | Name | Description |
 |------|------|-------------|
-| EEMLAB01-361 | Elektrik Makineler | Elektrik Makineler Laboratuvarı |
-| EEMLAB02-363 | Güç Elektroniği | Güç Elektroniği Laboratuvarı |
-| EEMLAB03-365 | Otomatik Kontrol | Otomatik Kontrol Laboratuvarı |
-| EEMLAB04-367 | Yapay Zeka ve İleri Sinyal | Yapay Zeka ve İleri Sinyal Laboratuvarı |
-| EEMLAB05-369 | Mikroişlemci | Mikroişlemci Laboratuvarı |
-| EEMLAB06-371 | Haberleşme ve Mikrodalga | Haberleşme ve Mikrodalga Laboratuvarı |
-| EEMLAB07-373 | Temel Elektrik-Elektronik | Temel Elektrik-Elektronik Laboratuvarı |
+| 1 | Elektrik Makineler | Elektrik Makineler Laboratuvarı |
+| 2 | Güç Elektroniği | Güç Elektroniği Laboratuvarı |
+| 3 | Otomatik Kontrol | Otomatik Kontrol Laboratuvarı |
+| 4 | Yapay Zeka ve İleri Sinyal | Yapay Zeka ve İleri Sinyal Laboratuvarı |
+| 5 | Mikroişlemci | Mikroişlemci Laboratuvarı |
+| 6 | Haberleşme ve Mikrodalga | Haberleşme ve Mikrodalga Laboratuvarı |
+| 7 | Temel Elektrik-Elektronik | Temel Elektrik-Elektronik Laboratuvarı |
 
 ## Setup
 

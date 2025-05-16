@@ -26,7 +26,7 @@ def seed_labs_command():
     # Update Default Lab if exists
     default_lab = Lab.query.filter_by(name='Default Lab').first()
     if default_lab and not default_lab.code:
-        default_lab.code = 'LAB-DEFAULT'
+        default_lab.code = '0'
         click.echo(f"Updated Default Lab with code: {default_lab.code}")
     
     # Add labs from predefined data
@@ -37,7 +37,7 @@ def seed_labs_command():
                 code=code,
                 name=name,
                 description=desc,
-                location=f"Room {code.split('-')[1]}" if '-' in code else None,
+                location=f"Room {code}",
                 max_cabinets=maxc
             )
             db.session.add(new_lab)
@@ -110,12 +110,12 @@ def update_lab_codes_command():
     
     default_lab = Lab.query.filter_by(name='Default Lab').first()
     if default_lab:
-        default_lab.code = 'LAB-DEFAULT'
+        default_lab.code = '0'
         click.echo(f"Updated Default Lab with code: {default_lab.code}")
     
     for lab in labs:
         if not lab.code or lab.code == 'None':
-            lab.code = f"LAB-{lab.id:03d}"
+            lab.code = f"{lab.id}"
             click.echo(f"Updated lab '{lab.name}' with code: {lab.code}")
     
     try:

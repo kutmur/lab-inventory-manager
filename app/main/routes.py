@@ -536,11 +536,20 @@ def delete_product(id):
     product = Product.query.get_or_404(id)
     lab_code = product.lab.code
     
+    # Store product information before deletion for logging
+    product_name = product.name
+    product_registry = product.registry_number
+    product_quantity = product.quantity
+    lab = product.lab
+    
     try:
+        # Log the deletion before actually deleting the product
+        create_user_log(current_user, 'delete', product, lab,
+                      -product_quantity, f"Product {product_name} (#{product_registry}) deleted from {lab_code}")
+                      
+        # Now delete the product
         db.session.delete(product)
         db.session.commit()
-        create_user_log(current_user, 'delete', product, product.lab,
-                      -product.quantity, 'Product deleted')
         flash('Product deleted successfully', 'success')
     except IntegrityError:
         db.session.rollback()
@@ -738,21 +747,28 @@ def delete_lab_product(lab_id, product_id):
     try:
         lab = Lab.query.get_or_404(lab_id)
         product = Product.query.filter_by(id=product_id, lab_id=lab_id).first_or_404()
+        
+        # Store product information before deletion for logging
+        product_name = product.name
+        product_registry = product.registry_number
+        product_quantity = product.quantity
 
+        # Log the deletion before actually deleting the product
         create_user_log(
             user=current_user,
             action_type='delete',
             product=product,
             lab=lab,
             quantity=-product.quantity,
-            notes=f"Deleted product {product.name} from lab {lab.code}"
+            notes=f"Deleted product {product_name} (#{product_registry}) from lab {lab.code}"
         )
 
         db.session.delete(product)
         db.session.commit()
-        flash(f'Product "{product.name}" deleted successfully from {lab.code}!', 'success')
+        flash(f'Product "{product_name}" deleted successfully from {lab.code}!', 'success')
     except Exception as e:
         db.session.rollback()
+        current_app.logger.exception(e)
         flash('Error deleting product. Please try again.', 'error')
 
     return redirect(url_for('main.dashboard', lab=lab.code))

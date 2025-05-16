@@ -17,13 +17,13 @@ class Lab(db.Model):
 
     # Hard-coded labs as specified in requirements
     PREDEFINED_LABS = [
-        ("EEMLAB01-361", "Elektrik Makineler", "Elektrik Makineler Laboratuvarı", 8),
-        ("EEMLAB02-363", "Güç Elektroniği", "Güç Elektroniği Laboratuvarı", 8),
-        ("EEMLAB03-365", "Otomatik Kontrol", "Otomatik Kontrol Laboratuvarı", 8),
-        ("EEMLAB04-367", "Yapay Zeka ve İleri Sinyal", "Yapay Zeka ve İleri Sinyal Laboratuvarı", 8),
-        ("EEMLAB05-369", "Mikroişlemci", "Mikroişlemci Laboratuvarı", 8),
-        ("EEMLAB06-371", "Haberleşme ve Mikrodalga", "Haberleşme ve Mikrodalga Laboratuvarı", 8),
-        ("EEMLAB07-373", "Temel Elektrik-Elektronik", "Temel Elektrik-Elektronik Laboratuvarı", 8),
+        ("1", "Elektrik Makineler", "Elektrik Makineler Laboratuvarı", 8),
+        ("2", "Güç Elektroniği", "Güç Elektroniği Laboratuvarı", 8),
+        ("3", "Otomatik Kontrol", "Otomatik Kontrol Laboratuvarı", 8),
+        ("4", "Yapay Zeka ve İleri Sinyal", "Yapay Zeka ve İleri Sinyal Laboratuvarı", 8),
+        ("5", "Mikroişlemci", "Mikroişlemci Laboratuvarı", 8),
+        ("6", "Haberleşme ve Mikrodalga", "Haberleşme ve Mikrodalga Laboratuvarı", 8),
+        ("7", "Temel Elektrik-Elektronik", "Temel Elektrik-Elektronik Laboratuvarı", 8),
     ]
 
     @classmethod
@@ -36,7 +36,7 @@ class Lab(db.Model):
                     code=code,
                     name=name,
                     description=desc,
-                    location=f"Room {code.split('-')[1]}" if '-' in code else None,
+                    location=f"Room {code}",
                     max_cabinets=maxc
                 )
                 db.session.add(lab)
